@@ -596,6 +596,21 @@ export interface HeroWaveRendererStatus {
   reason?: string;
   webglVersion?: 1 | 2;
 }
+export interface HeroWavePerformanceSample {
+  /** Monotonic rendered-frame index for this component instance. */
+  frame: number;
+  /** Renderer clock in seconds. */
+  time: number;
+  /** Time between rendered frames, excluding intentionally throttled RAF callbacks. */
+  frameMs: number;
+  /** Main-thread time spent preparing and submitting the sampled frame. */
+  cpuMs: number;
+  /** Asynchronous GPU time when EXT_disjoint_timer_query_webgl2 is available. */
+  gpuMs?: number;
+  /** True when the GPU invalidated the timer result, for example after clock changes. */
+  gpuDisjoint?: boolean;
+  renderer: "sine" | "hdr" | "unavailable";
+}
 export interface HeroWaveCycleEvent {
   index: number;
   direction: 1 | -1;
@@ -667,6 +682,11 @@ export interface HeroWaveBackgroundProps {
   onRendererError?: (error: Error) => void;
   /** Called after an actual renderer draw, including throttled HDR frames. */
   onFrame?: (time: number, delta: number) => void;
+  /**
+   * Optional low-frequency diagnostics. Enabling this samples CPU and GPU time
+   * without synchronously reading GPU results.
+   */
+  onPerformance?: (sample: HeroWavePerformanceSample) => void;
 }
 
 export interface HeroWaveSceneProps extends HeroWaveBackgroundProps {

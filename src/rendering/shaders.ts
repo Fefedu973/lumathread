@@ -1401,6 +1401,65 @@ void main() {
 }
 `;
 
+const PATH_INTEGRAL_ALL_LAYER_EVALUATION = `  float atmosphere = uLayerMask0.x
+    * lineKernel(4.6, radialDistance, profileSpread);
+  float broad = uLayerMask0.y
+    * lineKernel(6.2, radialDistance, profileSpread);
+  float body = uLayerMask0.z
+    * lineKernel(11.0, radialDistance, profileSpread);
+  float ridge = uLayerMask0.w
+    * lineKernel(20.0, radialDistance, profileSpread);
+  float core = uLayerMask1.x
+    * lineKernel(92.0, radialDistance, profileSpread);
+  float veil = uLayerMask1.y
+    * lineKernel(25.0, radialDistance, profileSpread);`;
+
+const PATH_INTEGRAL_LAYER_EVALUATIONS = [
+  `  if (
+    4.6 * radialDistance / max(profileSpread, 0.00001)
+      >= K0_MAX_ARGUMENT
+  ) return;
+  float atmosphere = lineKernel(4.6, radialDistance, profileSpread);
+  float broad = lineKernel(6.2, radialDistance, profileSpread);
+  float body = lineKernel(11.0, radialDistance, profileSpread);
+  float ridge = 0.0;
+  float core = 0.0;
+  float veil = 0.0;`,
+  `  if (
+    20.0 * radialDistance / max(profileSpread, 0.00001)
+      >= K0_MAX_ARGUMENT
+  ) return;
+  float atmosphere = 0.0;
+  float broad = 0.0;
+  float body = 0.0;
+  float ridge = lineKernel(20.0, radialDistance, profileSpread);
+  float core = 0.0;
+  float veil = lineKernel(25.0, radialDistance, profileSpread);`,
+  `  if (
+    92.0 * radialDistance / max(profileSpread, 0.00001)
+      >= K0_MAX_ARGUMENT
+  ) return;
+  float atmosphere = 0.0;
+  float broad = 0.0;
+  float body = 0.0;
+  float ridge = 0.0;
+  float core = lineKernel(92.0, radialDistance, profileSpread);
+  float veil = 0.0;`,
+] as const;
+
+/**
+ * The generic shader remains exported as the frozen parity reference. Runtime
+ * rendering uses compile-time layer specialization so each HDR pass evaluates
+ * only the kernels it can actually contribute.
+ */
+export const PATH_INTEGRAL_FRAGMENT_SHADERS =
+  PATH_INTEGRAL_LAYER_EVALUATIONS.map((evaluation) =>
+    PATH_INTEGRAL_FRAGMENT_SHADER.replace(
+      PATH_INTEGRAL_ALL_LAYER_EVALUATION,
+      evaluation,
+    ),
+  ) as unknown as readonly [string, string, string];
+
 export const PATH_INTEGRAL_COMPOSITE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 

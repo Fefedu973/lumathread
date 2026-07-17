@@ -29,7 +29,7 @@ import {
   GLASS_COMPOSITE_FRAGMENT_SHADER,
   GLASS_TEXT_FRAGMENT_SHADER,
   PATH_INTEGRAL_COMPOSITE_FRAGMENT_SHADER,
-  PATH_INTEGRAL_FRAGMENT_SHADER,
+  PATH_INTEGRAL_FRAGMENT_SHADERS,
   PATH_INTEGRAL_VERTEX_SHADER,
   SINE_FRAGMENT_SHADER,
   TERRAIN_DOTS_FRAGMENT_SHADER,
@@ -83,6 +83,7 @@ import {
   type HeroWavePathInterpolation,
   type HeroWavePathMode,
   type HeroWavePathTransform,
+  type HeroWavePerformanceSample,
   type HeroWavePointerType,
   type HeroWaveProfileInterpolation,
   type HeroWaveProfileWrap,
@@ -3791,20 +3792,58 @@ function combineDeformationValue(
 
 function propagationIsDynamic(propagation: Settings["propagation"]) {
   if (!propagation.enabled) return false;
-  const active = propagation.deformers.filter(
-    (deformer) => deformer.enabled !== false,
-  );
-  if (active.length === 0) return false;
-  return active.some((deformer) => {
+  for (const deformer of propagation.deformers) {
+    if (deformer.enabled === false) continue;
     if (deformer.type === "custom") return true;
-    if (Math.abs(propagation.phaseSpeed) <= 0.000001) return false;
+    if (Math.abs(propagation.phaseSpeed) <= 0.000001) continue;
     if (deformer.type === "harmonics") {
-      return deformer.waves.some(
-        (wave) => Math.abs(finite(wave.phaseSpeed, 1)) > 0.000001,
-      );
+      if (
+        deformer.waves.some(
+          (wave) => Math.abs(finite(wave.phaseSpeed, 1)) > 0.000001,
+        )
+      ) {
+        return true;
+      }
+      continue;
     }
-    return Math.abs(finite(deformer.phaseSpeed, 1)) > 0.000001;
-  });
+    if (Math.abs(finite(deformer.phaseSpeed, 1)) > 0.000001) return true;
+  }
+  return false;
+}
+
+interface PropagationScratch {
+  tangent: { x: number; y: number };
+  normal: { x: number; y: number };
+  point: { x: number; y: number };
+  context: HeroWaveDeformationContext;
+  output: HeroWaveDeformationOutput;
+}
+
+function createPropagationScratch(): PropagationScratch {
+  const tangent = { x: 0, y: 0 };
+  const normal = { x: 0, y: 0 };
+  const point = { x: 0, y: 0 };
+  return {
+    tangent,
+    normal,
+    point,
+    context: {
+      index: 0,
+      count: 0,
+      time: 0,
+      progress: 0,
+      arcProgress: 0,
+      point,
+      tangent,
+      normal,
+    },
+    output: {
+      normal: 0,
+      tangent: 0,
+      x: 0,
+      y: 0,
+    },
+  };
 }
 
 function buildPropagatedPathSamples(
@@ -3818,12 +3857,17 @@ function buildPropagatedPathSamples(
   onError?: (error: Error, deformer: HeroWaveCustomDeformer) => void,
   audioDeformation = 0,
   audioFrequency = 1,
+  scratch = createPropagationScratch(),
 ) {
   const propagation = settings.propagation;
-  const activeDeformers = propagation.deformers.filter(
-    (deformer) => deformer.enabled !== false,
-  );
-  const hasPropagation = propagation.enabled && activeDeformers.length > 0;
+  let hasActiveDeformer = false;
+  for (const deformer of propagation.deformers) {
+    if (deformer.enabled !== false) {
+      hasActiveDeformer = true;
+      break;
+    }
+  }
+  const hasPropagation = propagation.enabled && hasActiveDeformer;
   const hasAudioDeformation = Math.abs(audioDeformation) > 0.000001;
   if (!hasPropagation && !hasAudioDeformation) {
     target.length = source.length;
@@ -3849,25 +3893,9 @@ function buildPropagatedPathSamples(
   const uniqueCount =
     closed && source.length > 2 ? source.length - 1 : source.length;
   const timePhase = propagation.phaseOffset + time * propagation.phaseSpeed;
-  const tangent = { x: 0, y: 0 };
-  const normal = { x: 0, y: 0 };
-  const point = { x: 0, y: 0 };
-  const context: HeroWaveDeformationContext = {
-    index: 0,
-    count: source.length,
-    time: timePhase,
-    progress: 0,
-    arcProgress: 0,
-    point,
-    tangent,
-    normal,
-  };
-  const deformerOutput: HeroWaveDeformationOutput = {
-    normal: 0,
-    tangent: 0,
-    x: 0,
-    y: 0,
-  };
+  const { tangent, normal, point, context, output: deformerOutput } = scratch;
+  context.count = source.length;
+  context.time = timePhase;
 
   target.length = source.length;
   for (let index = 0; index < source.length; index++) {
@@ -3914,52 +3942,56 @@ function buildPropagatedPathSamples(
     let firstX = true;
     let firstY = true;
 
-    for (const deformer of hasPropagation ? activeDeformers : []) {
-      evaluateDeformer(
-        deformer,
-        context,
-        domain,
-        timePhase,
-        deformerOutput,
-        onError,
-      );
-      const direction =
-        deformer.direction ?? (deformer.type === "custom" ? "both" : "normal");
-      if (direction === "normal" || direction === "both") {
-        normalDisplacement = combineDeformationValue(
-          normalDisplacement,
-          deformerOutput.normal,
-          propagation.combine,
-          firstNormal,
+    if (hasPropagation) {
+      for (const deformer of propagation.deformers) {
+        if (deformer.enabled === false) continue;
+        evaluateDeformer(
+          deformer,
+          context,
+          domain,
+          timePhase,
+          deformerOutput,
+          onError,
         );
-        firstNormal = false;
-      }
-      if (direction === "tangent" || direction === "both") {
-        tangentDisplacement = combineDeformationValue(
-          tangentDisplacement,
-          deformerOutput.tangent,
-          propagation.combine,
-          firstTangent,
-        );
-        firstTangent = false;
-      }
-      if (direction === "x" || deformerOutput.x !== 0) {
-        xDisplacement = combineDeformationValue(
-          xDisplacement,
-          deformerOutput.x,
-          propagation.combine,
-          firstX,
-        );
-        firstX = false;
-      }
-      if (direction === "y" || deformerOutput.y !== 0) {
-        yDisplacement = combineDeformationValue(
-          yDisplacement,
-          deformerOutput.y,
-          propagation.combine,
-          firstY,
-        );
-        firstY = false;
+        const direction =
+          deformer.direction ??
+          (deformer.type === "custom" ? "both" : "normal");
+        if (direction === "normal" || direction === "both") {
+          normalDisplacement = combineDeformationValue(
+            normalDisplacement,
+            deformerOutput.normal,
+            propagation.combine,
+            firstNormal,
+          );
+          firstNormal = false;
+        }
+        if (direction === "tangent" || direction === "both") {
+          tangentDisplacement = combineDeformationValue(
+            tangentDisplacement,
+            deformerOutput.tangent,
+            propagation.combine,
+            firstTangent,
+          );
+          firstTangent = false;
+        }
+        if (direction === "x" || deformerOutput.x !== 0) {
+          xDisplacement = combineDeformationValue(
+            xDisplacement,
+            deformerOutput.x,
+            propagation.combine,
+            firstX,
+          );
+          firstX = false;
+        }
+        if (direction === "y" || deformerOutput.y !== 0) {
+          yDisplacement = combineDeformationValue(
+            yDisplacement,
+            deformerOutput.y,
+            propagation.combine,
+            firstY,
+          );
+          firstY = false;
+        }
       }
     }
 
@@ -4082,7 +4114,7 @@ function buildIntegralSegmentData(
   endpointFeatherPx: number,
   target: Float32Array,
 ) {
-  if (samples.length < 2) return { floatCount: 0, segmentCount: 0 };
+  if (samples.length < 2) return 0;
 
   let totalLength = 0;
   for (let index = 1; index < samples.length; index++) {
@@ -4130,7 +4162,7 @@ function buildIntegralSegmentData(
     segmentCount += 1;
   }
 
-  return { floatCount: cursor, segmentCount };
+  return segmentCount;
 }
 
 function buildHueMatrix(angle: number, target: Float32Array) {
@@ -4271,18 +4303,20 @@ const GLASS_COMPOSITE_UNIFORMS = [
 ] as const;
 
 interface PathResources {
-  integralProgram: ProgramBundle;
+  integralPrograms: [ProgramBundle, ProgramBundle, ProgramBundle];
   compositeProgram: ProgramBundle;
   quadBuffer: WebGLBuffer;
   segmentBuffers: [WebGLBuffer, WebGLBuffer, WebGLBuffer];
-  framebuffer: WebGLFramebuffer;
+  framebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
   waveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
   reflectionTextures: [WebGLTexture, WebGLTexture];
   k0Texture: WebGLTexture;
   passWidths: [number, number, number];
   passHeights: [number, number, number];
-  segmentCounts: [number, number, number];
-  uploadedGeometryKeys: [string, string, string];
+  stagingData: [Float32Array, Float32Array, Float32Array];
+  uploadedSceneHashes: [number, number, number];
+  targetSettingsReference: Settings | null;
+  targetSizeRevision: number;
 }
 
 const SINE_UNIFORMS = [
@@ -4789,6 +4823,7 @@ interface FilamentGeometryState {
   passSamples: [CurveSample[], CurveSample[], CurveSample[]];
   segmentData: [Float32Array, Float32Array, Float32Array];
   segmentCounts: [number, number, number];
+  propagationScratch: PropagationScratch;
   closed: boolean;
 }
 
@@ -4850,6 +4885,7 @@ interface PreparedFilamentFrame {
   followBlend: number;
   style: FilamentStyleTextures;
   modifiers: FollowRuntimeModifiers;
+  segmentOffsets: [number, number, number];
 }
 
 function createRuntimeModifiers(): FollowRuntimeModifiers {
@@ -4891,6 +4927,7 @@ function createFilamentGeometryState(id: string): FilamentGeometryState {
       new Float32Array(0),
     ],
     segmentCounts: [0, 0, 0],
+    propagationScratch: createPropagationScratch(),
     closed: false,
   };
 }
@@ -4941,6 +4978,20 @@ function activeFilaments(settings: Settings) {
     : settings.enabled
       ? [settings]
       : [];
+}
+
+function shallowSettingsInputEqual(
+  left: Record<string, unknown> | null,
+  right: Record<string, unknown>,
+) {
+  if (!left) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (const key of rightKeys) {
+    if (!Object.is(left[key], right[key])) return false;
+  }
+  return true;
 }
 
 function paletteWrapUniform(wrap: HeroWavePaletteWrap) {
@@ -5011,6 +5062,7 @@ const HdrHeroWaveBackground = forwardRef<
     onRendererStatus,
     onRendererError,
     onFrame,
+    onPerformance,
     ...inputSettings
   },
   forwardedRef,
@@ -5030,6 +5082,7 @@ const HdrHeroWaveBackground = forwardRef<
     onRendererStatus,
     onRendererError,
     onFrame,
+    onPerformance,
   });
   callbacksRef.current = {
     onCycle,
@@ -5037,12 +5090,18 @@ const HdrHeroWaveBackground = forwardRef<
     onRendererStatus,
     onRendererError,
     onFrame,
+    onPerformance,
   };
-  const settingsRef = useRef<Settings>(resolveSettings(inputSettings));
+  const settingsRef = useRef<Settings>(null as unknown as Settings);
+  const settingsInputRef = useRef<Record<string, unknown> | null>(null);
   const [contextEpoch, setContextEpoch] = useState(0);
-  const resolvedSettings = resolveSettings(inputSettings);
-  settingsRef.current = resolvedSettings;
-  settingsRevisionRef.current += 1;
+  const settingsInput = inputSettings as Record<string, unknown>;
+  if (!shallowSettingsInputEqual(settingsInputRef.current, settingsInput)) {
+    settingsInputRef.current = settingsInput;
+    settingsRef.current = resolveSettings(inputSettings);
+    settingsRevisionRef.current += 1;
+  }
+  const resolvedSettings = settingsRef.current;
   const fadeInDuration = resolvedSettings.fadeInDuration;
   const fadeInEasing = resolvedSettings.fadeInEasing;
   const musicVisualizerConnectionKey = JSON.stringify({
@@ -5211,11 +5270,17 @@ const HdrHeroWaveBackground = forwardRef<
     delete canvas.dataset.ready;
     canvas.style.opacity = "0";
 
-    let lastReportedStatus = "";
+    let lastReportedStatus: HeroWaveRendererStatus | null = null;
     const reportStatus = (status: HeroWaveRendererStatus) => {
-      const key = `${status.renderer}:${status.supported}:${status.reason ?? ""}:${status.webglVersion ?? 0}`;
-      if (key === lastReportedStatus) return;
-      lastReportedStatus = key;
+      if (
+        lastReportedStatus?.renderer === status.renderer &&
+        lastReportedStatus.supported === status.supported &&
+        lastReportedStatus.reason === status.reason &&
+        lastReportedStatus.webglVersion === status.webglVersion
+      ) {
+        return;
+      }
+      lastReportedStatus = status;
       canvas.dataset.pathRenderer = status.renderer;
       callbacksRef.current.onRendererStatus?.(status);
     };
@@ -5489,6 +5554,7 @@ const HdrHeroWaveBackground = forwardRef<
     let sizeRevision = 0;
     let maskHash = -1;
     let maskSizeRevision = -1;
+    let maskSettingsReference: Settings | null = null;
     const backgroundCanvas = document.createElement("canvas");
     let backgroundImageElement: HTMLImageElement | null = null;
     let backgroundImageSource = "";
@@ -5800,36 +5866,10 @@ const HdrHeroWaveBackground = forwardRef<
 
     const attachIntegralPass = (resources: PathResources, pass: number) => {
       if (!exactGl) return;
-      exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, resources.framebuffer);
-      exactGl.framebufferTexture2D(
+      exactGl.bindFramebuffer(
         exactGl.FRAMEBUFFER,
-        exactGl.COLOR_ATTACHMENT0,
-        exactGl.TEXTURE_2D,
-        resources.waveTextures[pass]!,
-        0,
+        resources.framebuffers[pass]!,
       );
-      if (pass < HERO_PATH_PASS_CORE) {
-        exactGl.framebufferTexture2D(
-          exactGl.FRAMEBUFFER,
-          exactGl.COLOR_ATTACHMENT1,
-          exactGl.TEXTURE_2D,
-          resources.reflectionTextures[pass]!,
-          0,
-        );
-        exactGl.drawBuffers([
-          exactGl.COLOR_ATTACHMENT0,
-          exactGl.COLOR_ATTACHMENT1,
-        ]);
-      } else {
-        exactGl.framebufferTexture2D(
-          exactGl.FRAMEBUFFER,
-          exactGl.COLOR_ATTACHMENT1,
-          exactGl.TEXTURE_2D,
-          null,
-          0,
-        );
-        exactGl.drawBuffers([exactGl.COLOR_ATTACHMENT0]);
-      }
       exactGl.viewport(
         0,
         0,
@@ -5843,12 +5883,20 @@ const HdrHeroWaveBackground = forwardRef<
       settings: Settings,
     ) => {
       if (!exactGl) return false;
+      if (
+        resources.targetSettingsReference === settings &&
+        resources.targetSizeRevision === sizeRevision
+      ) {
+        return false;
+      }
       const desired = desiredIntegralPassSizes(settings);
       const unchanged = desired.widths.every(
         (width, index) =>
           width === resources.passWidths[index] &&
           desired.heights[index] === resources.passHeights[index],
       );
+      resources.targetSettingsReference = settings;
+      resources.targetSizeRevision = sizeRevision;
       if (unchanged) return false;
       const allocateFloatTexture = (
         texture: WebGLTexture,
@@ -5885,7 +5933,32 @@ const HdrHeroWaveBackground = forwardRef<
       resources.passWidths = desired.widths;
       resources.passHeights = desired.heights;
       for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
-        attachIntegralPass(resources, pass);
+        exactGl.bindFramebuffer(
+          exactGl.FRAMEBUFFER,
+          resources.framebuffers[pass]!,
+        );
+        exactGl.framebufferTexture2D(
+          exactGl.FRAMEBUFFER,
+          exactGl.COLOR_ATTACHMENT0,
+          exactGl.TEXTURE_2D,
+          resources.waveTextures[pass]!,
+          0,
+        );
+        if (pass < HERO_PATH_PASS_CORE) {
+          exactGl.framebufferTexture2D(
+            exactGl.FRAMEBUFFER,
+            exactGl.COLOR_ATTACHMENT1,
+            exactGl.TEXTURE_2D,
+            resources.reflectionTextures[pass]!,
+            0,
+          );
+          exactGl.drawBuffers([
+            exactGl.COLOR_ATTACHMENT0,
+            exactGl.COLOR_ATTACHMENT1,
+          ]);
+        } else {
+          exactGl.drawBuffers([exactGl.COLOR_ATTACHMENT0]);
+        }
         const status = exactGl.checkFramebufferStatus(exactGl.FRAMEBUFFER);
         if (status !== exactGl.FRAMEBUFFER_COMPLETE) {
           throw new Error(
@@ -5899,12 +5972,16 @@ const HdrHeroWaveBackground = forwardRef<
 
     const destroyPathResources = (resources: PathResources | null) => {
       if (!resources || !exactGl) return;
-      exactGl.deleteProgram(resources.integralProgram.program);
+      for (const program of resources.integralPrograms) {
+        exactGl.deleteProgram(program.program);
+      }
       exactGl.deleteProgram(resources.compositeProgram.program);
       exactGl.deleteBuffer(resources.quadBuffer);
       for (const buffer of resources.segmentBuffers)
         exactGl.deleteBuffer(buffer);
-      exactGl.deleteFramebuffer(resources.framebuffer);
+      for (const framebuffer of resources.framebuffers) {
+        exactGl.deleteFramebuffer(framebuffer);
+      }
       for (const texture of resources.waveTextures)
         exactGl.deleteTexture(texture);
       for (const texture of resources.reflectionTextures)
@@ -5929,11 +6006,11 @@ const HdrHeroWaveBackground = forwardRef<
         pathResources = null;
         return pathResources;
       }
-      let integralProgram: ProgramBundle | null = null;
+      const integralPrograms: ProgramBundle[] = [];
       let compositeProgram: ProgramBundle | null = null;
       let quadBuffer: WebGLBuffer | null = null;
       const segmentBuffers: WebGLBuffer[] = [];
-      let framebuffer: WebGLFramebuffer | null = null;
+      const framebuffers: WebGLFramebuffer[] = [];
       const waveTextures: WebGLTexture[] = [];
       const reflectionTextures: WebGLTexture[] = [];
       let k0Texture: WebGLTexture | null = null;
@@ -5953,19 +6030,23 @@ const HdrHeroWaveBackground = forwardRef<
             "The exact renderer requires two floating-point draw buffers.",
           );
         }
-        integralProgram = createProgramBundle(
-          exactGl,
-          PATH_INTEGRAL_VERTEX_SHADER,
-          PATH_INTEGRAL_FRAGMENT_SHADER,
-          [
-            "aCorner",
-            "aSegmentStart",
-            "aSegmentEnd",
-            "aProgressRange",
-            "aEndpointWeights",
-          ],
-          PATH_INTEGRAL_UNIFORMS,
-        );
+        for (const fragmentShader of PATH_INTEGRAL_FRAGMENT_SHADERS) {
+          integralPrograms.push(
+            createProgramBundle(
+              exactGl,
+              PATH_INTEGRAL_VERTEX_SHADER,
+              fragmentShader,
+              [
+                "aCorner",
+                "aSegmentStart",
+                "aSegmentEnd",
+                "aProgressRange",
+                "aEndpointWeights",
+              ],
+              PATH_INTEGRAL_UNIFORMS,
+            ),
+          );
+        }
         compositeProgram = createProgramBundle(
           exactGl,
           FULLSCREEN_VERTEX_SHADER_300,
@@ -5974,8 +6055,14 @@ const HdrHeroWaveBackground = forwardRef<
           PATH_INTEGRAL_COMPOSITE_UNIFORMS,
         );
         quadBuffer = exactGl.createBuffer();
-        framebuffer = exactGl.createFramebuffer();
-        if (!quadBuffer || !framebuffer) {
+        for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+          const framebuffer = exactGl.createFramebuffer();
+          if (!framebuffer) {
+            throw new Error("Unable to allocate an exact path framebuffer.");
+          }
+          framebuffers.push(framebuffer);
+        }
+        if (!quadBuffer) {
           throw new Error("Unable to allocate exact path resources.");
         }
         exactGl.bindBuffer(exactGl.ARRAY_BUFFER, quadBuffer);
@@ -5988,13 +6075,7 @@ const HdrHeroWaveBackground = forwardRef<
           const buffer = exactGl.createBuffer();
           if (!buffer) throw new Error("Unable to allocate a segment buffer.");
           exactGl.bindBuffer(exactGl.ARRAY_BUFFER, buffer);
-          exactGl.bufferData(
-            exactGl.ARRAY_BUFFER,
-            HERO_MAX_PATH_SAMPLES *
-              HERO_PATH_SEGMENT_STRIDE *
-              Float32Array.BYTES_PER_ELEMENT,
-            exactGl.DYNAMIC_DRAW,
-          );
+          exactGl.bufferData(exactGl.ARRAY_BUFFER, 0, exactGl.STREAM_DRAW);
           segmentBuffers.push(buffer);
         }
         const createFloatTarget = () =>
@@ -6016,7 +6097,11 @@ const HdrHeroWaveBackground = forwardRef<
           getPathK0TextureData(),
         );
         const resources: PathResources = {
-          integralProgram,
+          integralPrograms: [
+            integralPrograms[0]!,
+            integralPrograms[1]!,
+            integralPrograms[2]!,
+          ],
           compositeProgram,
           quadBuffer,
           segmentBuffers: [
@@ -6024,14 +6109,20 @@ const HdrHeroWaveBackground = forwardRef<
             segmentBuffers[1]!,
             segmentBuffers[2]!,
           ],
-          framebuffer,
+          framebuffers: [framebuffers[0]!, framebuffers[1]!, framebuffers[2]!],
           waveTextures: [waveTextures[0]!, waveTextures[1]!, waveTextures[2]!],
           reflectionTextures: [reflectionTextures[0]!, reflectionTextures[1]!],
           k0Texture,
           passWidths: [0, 0, 0],
           passHeights: [0, 0, 0],
-          segmentCounts: [0, 0, 0],
-          uploadedGeometryKeys: ["", "", ""],
+          stagingData: [
+            new Float32Array(0),
+            new Float32Array(0),
+            new Float32Array(0),
+          ],
+          uploadedSceneHashes: [-1, -1, -1],
+          targetSettingsReference: null,
+          targetSizeRevision: -1,
         };
         allocatePathTargets(resources, settings);
         pathResources = resources;
@@ -6052,11 +6143,15 @@ const HdrHeroWaveBackground = forwardRef<
           reason,
           webglVersion: 2,
         });
-        if (integralProgram) exactGl.deleteProgram(integralProgram.program);
+        for (const program of integralPrograms) {
+          exactGl.deleteProgram(program.program);
+        }
         if (compositeProgram) exactGl.deleteProgram(compositeProgram.program);
         if (quadBuffer) exactGl.deleteBuffer(quadBuffer);
         for (const buffer of segmentBuffers) exactGl.deleteBuffer(buffer);
-        if (framebuffer) exactGl.deleteFramebuffer(framebuffer);
+        for (const framebuffer of framebuffers) {
+          exactGl.deleteFramebuffer(framebuffer);
+        }
         for (const texture of waveTextures) exactGl.deleteTexture(texture);
         for (const texture of reflectionTextures)
           exactGl.deleteTexture(texture);
@@ -6101,6 +6196,57 @@ const HdrHeroWaveBackground = forwardRef<
     let inViewport = true;
     let reducedMotion = false;
     let readyReported = false;
+    let renderedFrameIndex = 0;
+    let lastRenderer: HeroWavePerformanceSample["renderer"] = "unavailable";
+    const gpuTimerExtension = exactGl?.getExtension(
+      "EXT_disjoint_timer_query_webgl2",
+    );
+    interface PendingGpuTimer {
+      query: WebGLQuery;
+      sample: HeroWavePerformanceSample;
+    }
+    const pendingGpuTimers: PendingGpuTimer[] = [];
+
+    const emitPerformanceSample = (sample: HeroWavePerformanceSample) => {
+      callbacksRef.current.onPerformance?.(sample);
+    };
+
+    const pollGpuTimers = () => {
+      if (!exactGl || !gpuTimerExtension || pendingGpuTimers.length === 0) {
+        return;
+      }
+      const disjoint = Boolean(
+        exactGl.getParameter(gpuTimerExtension.GPU_DISJOINT_EXT),
+      );
+      if (disjoint) {
+        for (const pending of pendingGpuTimers) {
+          exactGl.deleteQuery(pending.query);
+          emitPerformanceSample({
+            ...pending.sample,
+            gpuDisjoint: true,
+          });
+        }
+        pendingGpuTimers.length = 0;
+        return;
+      }
+      while (pendingGpuTimers.length > 0) {
+        const pending = pendingGpuTimers[0]!;
+        const available = exactGl.getQueryParameter(
+          pending.query,
+          exactGl.QUERY_RESULT_AVAILABLE,
+        );
+        if (!available) break;
+        const elapsedNanoseconds = Number(
+          exactGl.getQueryParameter(pending.query, exactGl.QUERY_RESULT),
+        );
+        exactGl.deleteQuery(pending.query);
+        pendingGpuTimers.shift();
+        emitPerformanceSample({
+          ...pending.sample,
+          gpuMs: elapsedNanoseconds / 1_000_000,
+        });
+      }
+    };
 
     const requestFrame = () => {
       const settings = settingsRef.current;
@@ -7567,6 +7713,7 @@ const HdrHeroWaveBackground = forwardRef<
             reportDeformerError,
             audioDeformation,
             settings.musicVisualizer.deformationFrequency,
+            state.propagationScratch,
           );
           state.deformationKey = deformationKey;
           state.meshKey = -1;
@@ -7641,24 +7788,26 @@ const HdrHeroWaveBackground = forwardRef<
           1,
         ),
       );
-      const maximumChords = [
-        Math.max(16, settings.quality.farMaxChordPx * narrowness),
-        Math.max(6, settings.quality.midMaxChordPx * narrowness),
-        Math.max(2, settings.quality.coreMaxChordPx * narrowness),
-      ];
-      const flatnesses = [
-        Math.max(0.5, settings.quality.farFlatnessPx * narrowness),
-        Math.max(0.12, settings.quality.midFlatnessPx * narrowness),
-        Math.max(0.04, settings.quality.coreFlatnessPx * narrowness),
-      ];
       for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+        const maximumChord =
+          pass === HERO_PATH_PASS_FAR
+            ? Math.max(16, settings.quality.farMaxChordPx * narrowness)
+            : pass === HERO_PATH_PASS_MID
+              ? Math.max(6, settings.quality.midMaxChordPx * narrowness)
+              : Math.max(2, settings.quality.coreMaxChordPx * narrowness);
+        const flatness =
+          pass === HERO_PATH_PASS_FAR
+            ? Math.max(0.5, settings.quality.farFlatnessPx * narrowness)
+            : pass === HERO_PATH_PASS_MID
+              ? Math.max(0.12, settings.quality.midFlatnessPx * narrowness)
+              : Math.max(0.04, settings.quality.coreFlatnessPx * narrowness);
         const passSamples = state.passSamples[pass]!;
         simplifyPathSamplesForPass(
           renderSamples,
           canvasWidth,
           canvasHeight,
-          maximumChords[pass]!,
-          flatnesses[pass]!,
+          maximumChord,
+          flatness,
           passSamples,
         );
         const required =
@@ -7667,7 +7816,7 @@ const HdrHeroWaveBackground = forwardRef<
           state.segmentData[pass]!,
           required,
         );
-        const built = buildIntegralSegmentData(
+        state.segmentCounts[pass] = buildIntegralSegmentData(
           passSamples,
           state.closed,
           canvasWidth,
@@ -7675,7 +7824,6 @@ const HdrHeroWaveBackground = forwardRef<
           HERO_PATH_ENDPOINT_FEATHER_CSS_PX * dpr,
           state.segmentData[pass]!,
         );
-        state.segmentCounts[pass] = built.segmentCount;
       }
       state.meshRevision += 1;
       state.meshKey = materialKey;
@@ -7689,7 +7837,14 @@ const HdrHeroWaveBackground = forwardRef<
     };
 
     const updateMaskTexture = (settings: Settings) => {
+      if (
+        maskSettingsReference === settings &&
+        maskSizeRevision === sizeRevision
+      ) {
+        return;
+      }
       const nextHash = hashMasks(settings.dotMasks, settings.maskFeather);
+      maskSettingsReference = settings;
       if (nextHash === maskHash && maskSizeRevision === sizeRevision) return;
       const mask = buildDotMaskTextureData(
         settings.dotMasks,
@@ -7736,9 +7891,13 @@ const HdrHeroWaveBackground = forwardRef<
       }
     };
 
-    const bindIntegralGeometry = (resources: PathResources, pass: number) => {
+    const bindIntegralGeometry = (
+      resources: PathResources,
+      pass: number,
+      segmentOffsetFloats = 0,
+    ) => {
       if (!exactGl) return;
-      const bundle = resources.integralProgram;
+      const bundle = resources.integralPrograms[pass]!;
       const corner = bundle.attributes.aCorner ?? -1;
       exactGl.bindBuffer(exactGl.ARRAY_BUFFER, resources.quadBuffer);
       if (corner >= 0) {
@@ -7758,7 +7917,7 @@ const HdrHeroWaveBackground = forwardRef<
           exactGl.FLOAT,
           false,
           stride,
-          offset * Float32Array.BYTES_PER_ELEMENT,
+          (segmentOffsetFloats + offset) * Float32Array.BYTES_PER_ELEMENT,
         );
         exactGl.vertexAttribDivisor(location, 1);
       };
@@ -8594,7 +8753,7 @@ const HdrHeroWaveBackground = forwardRef<
       followBlend: number,
     ) => {
       if (!exactGl) return;
-      const bundle = resources.integralProgram;
+      const bundle = resources.integralPrograms[pass]!;
       const passWidth = resources.passWidths[pass]!;
       const passHeight = resources.passHeights[pass]!;
       const profileRadius = pathPassProfileRadius(pass);
@@ -8741,27 +8900,60 @@ const HdrHeroWaveBackground = forwardRef<
       );
     };
 
-    const uploadAndDrawFilament = (
+    const uploadSceneGeometry = (
       resources: PathResources,
-      geometry: FilamentGeometryState,
+      scene: readonly PreparedFilamentFrame[],
       pass: number,
     ) => {
       if (!exactGl) return;
-      const count = geometry.segmentCounts[pass] ?? 0;
-      if (count <= 0) return;
-      const floatCount = count * HERO_PATH_SEGMENT_STRIDE;
-      const uploadKey = `${geometry.id}:${geometry.meshRevision}:${count}`;
-      exactGl.bindBuffer(exactGl.ARRAY_BUFFER, resources.segmentBuffers[pass]!);
-      if (resources.uploadedGeometryKeys[pass] !== uploadKey) {
-        exactGl.bufferSubData(
-          exactGl.ARRAY_BUFFER,
-          0,
-          geometry.segmentData[pass]!.subarray(0, floatCount),
-        );
-        resources.uploadedGeometryKeys[pass] = uploadKey;
+      let sceneHash = 2_166_136_261;
+      let totalFloatCount = 0;
+      for (const entry of scene) {
+        const count = entry.geometry.segmentCounts[pass] ?? 0;
+        entry.segmentOffsets[pass] = totalFloatCount;
+        totalFloatCount += count * HERO_PATH_SEGMENT_STRIDE;
+        sceneHash = hashString(sceneHash, entry.geometry.id);
+        sceneHash = hashMix(sceneHash, entry.geometry.meshRevision);
+        sceneHash = hashMix(sceneHash, count);
       }
-      resources.segmentCounts[pass] = count;
-      bindIntegralGeometry(resources, pass);
+      if (resources.uploadedSceneHashes[pass] === sceneHash) return;
+      resources.uploadedSceneHashes[pass] = sceneHash;
+      if (totalFloatCount <= 0) return;
+
+      let staging = resources.stagingData[pass]!;
+      staging = ensureFloatCapacity(staging, totalFloatCount);
+      resources.stagingData[pass] = staging;
+      let cursor = 0;
+      for (const entry of scene) {
+        const count = entry.geometry.segmentCounts[pass] ?? 0;
+        const floatCount = count * HERO_PATH_SEGMENT_STRIDE;
+        if (floatCount <= 0) continue;
+        staging.set(
+          entry.geometry.segmentData[pass]!.subarray(0, floatCount),
+          cursor,
+        );
+        cursor += floatCount;
+      }
+
+      exactGl.bindBuffer(exactGl.ARRAY_BUFFER, resources.segmentBuffers[pass]!);
+      // Replacing the data store lets streaming backends avoid waiting for the
+      // previous frame to finish reading the same storage.
+      exactGl.bufferData(
+        exactGl.ARRAY_BUFFER,
+        staging.subarray(0, totalFloatCount),
+        exactGl.STREAM_DRAW,
+      );
+    };
+
+    const drawUploadedFilament = (
+      resources: PathResources,
+      entry: PreparedFilamentFrame,
+      pass: number,
+    ) => {
+      if (!exactGl) return;
+      const count = entry.geometry.segmentCounts[pass] ?? 0;
+      if (count <= 0) return;
+      bindIntegralGeometry(resources, pass, entry.segmentOffsets[pass]);
       exactGl.drawArraysInstanced(
         exactGl.TRIANGLES,
         0,
@@ -8906,6 +9098,7 @@ const HdrHeroWaveBackground = forwardRef<
             followBlend,
             style: getStyleTextures(settings),
             modifiers: createRuntimeModifiers(),
+            segmentOffsets: [0, 0, 0],
           };
           preparedSceneFrames[index] = entry;
         } else {
@@ -8925,12 +9118,13 @@ const HdrHeroWaveBackground = forwardRef<
           entry.modifiers,
         );
       }
-      activateProgram(resources.integralProgram.program);
       exactGl.enable(exactGl.BLEND);
       exactGl.blendEquation(exactGl.FUNC_ADD);
       exactGl.blendFunc(exactGl.ONE, exactGl.ONE);
       for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+        activateProgram(resources.integralPrograms[pass]!.program);
         clearIntegralPass(resources, pass);
+        uploadSceneGeometry(resources, preparedSceneFrames, pass);
         for (const entry of preparedSceneFrames) {
           if ((entry.geometry.segmentCounts[pass] ?? 0) <= 0) continue;
           applyIntegralUniforms(
@@ -8943,7 +9137,7 @@ const HdrHeroWaveBackground = forwardRef<
             entry.geometry.closed,
             entry.followBlend,
           );
-          uploadAndDrawFilament(resources, entry.geometry, pass);
+          drawUploadedFilament(resources, entry, pass);
         }
       }
       exactGl.disable(exactGl.BLEND);
@@ -9042,8 +9236,13 @@ const HdrHeroWaveBackground = forwardRef<
         scene[0] === root &&
         root.pathMode === "sine" &&
         !root.requiresPathPipeline;
-      if (directSine) drawSine(root);
-      else drawPathScene(root, scene, frameDelta);
+      if (directSine) {
+        lastRenderer = "sine";
+        drawSine(root);
+      } else {
+        drawPathScene(root, scene, frameDelta);
+        lastRenderer = pathResources ? "hdr" : "unavailable";
+      }
       drawTerrainDots(root);
       compositeGlassText(root);
       notifyCycles(scene);
@@ -9089,6 +9288,7 @@ const HdrHeroWaveBackground = forwardRef<
     function loop(timestamp: number) {
       frameScheduled = false;
       if (!running) return;
+      pollGpuTimers();
       const root = settingsRef.current;
       const scene = getActiveScene(root);
       const minimumFrameInterval =
@@ -9125,7 +9325,44 @@ const HdrHeroWaveBackground = forwardRef<
       }
       if (!autonomousPaused) interactionTime += frameDelta;
       currentTimeRef.current = clockTime;
-      draw(frameDelta);
+      renderedFrameIndex += 1;
+      const shouldSamplePerformance =
+        Boolean(callbacksRef.current.onPerformance) &&
+        renderedFrameIndex % 15 === 0;
+      const cpuStartedAt = shouldSamplePerformance ? performance.now() : 0;
+      let gpuQuery: WebGLQuery | null = null;
+      if (
+        shouldSamplePerformance &&
+        exactGl &&
+        gpuTimerExtension &&
+        pendingGpuTimers.length < 8
+      ) {
+        gpuQuery = exactGl.createQuery();
+        if (gpuQuery) {
+          exactGl.beginQuery(gpuTimerExtension.TIME_ELAPSED_EXT, gpuQuery);
+        }
+      }
+      let drawCompleted = false;
+      try {
+        draw(frameDelta);
+        drawCompleted = true;
+      } finally {
+        if (gpuQuery && exactGl && gpuTimerExtension) {
+          exactGl.endQuery(gpuTimerExtension.TIME_ELAPSED_EXT);
+          if (!drawCompleted) exactGl.deleteQuery(gpuQuery);
+        }
+      }
+      if (shouldSamplePerformance) {
+        const sample: HeroWavePerformanceSample = {
+          frame: renderedFrameIndex,
+          time: clockTime,
+          frameMs: frameDelta * 1000,
+          cpuMs: performance.now() - cpuStartedAt,
+          renderer: lastRenderer,
+        };
+        if (gpuQuery) pendingGpuTimers.push({ query: gpuQuery, sample });
+        else emitPerformanceSample(sample);
+      }
       const clockRuns =
         root.controlledTime === undefined &&
         !root.paused &&
@@ -9220,6 +9457,12 @@ const HdrHeroWaveBackground = forwardRef<
       destroyPathResources(pathResources ?? null);
       destroyTerrainResources(terrainResources ?? null);
       destroyGlassResources(glassResources ?? null);
+      if (exactGl) {
+        for (const pending of pendingGpuTimers) {
+          exactGl.deleteQuery(pending.query);
+        }
+      }
+      pendingGpuTimers.length = 0;
       for (const entry of styleTextures.values()) {
         gl.deleteTexture(entry.palette);
         gl.deleteTexture(entry.profiles);

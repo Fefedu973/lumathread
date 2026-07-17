@@ -34,7 +34,10 @@ http://localhost:5173/dev/hero-background
 
 The regression benchmark compares the frozen extraction snapshot with the
 current renderer under the same deterministic scene. It reports rolling FPS,
-median and P95 frame times, and frames over 25 ms:
+median and P95 frame times, frames over 25 ms, normalized long-run FPS drift,
+CPU submission time, and asynchronous GPU time when timer queries are
+available. All measurement and chart buffers are bounded so the benchmark's
+own cost does not increase during a soak test:
 
 ```text
 http://localhost:5173/dev/benchmark

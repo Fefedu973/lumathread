@@ -31,11 +31,8 @@ describe("frozen renderer parity", () => {
     }
   });
 
-  test("keeps all shader programs byte-for-byte equivalent", () => {
-    expect(Object.keys(currentShaders).sort()).toEqual(
-      Object.keys(referenceShaders).sort(),
-    );
-    for (const name of Object.keys(currentShaders)) {
+  test("keeps all historical shader programs byte-for-byte equivalent", () => {
+    for (const name of Object.keys(referenceShaders)) {
       // biome-ignore lint/performance/noDynamicNamespaceImportAccess: parity must cover every exported shader without a hand-maintained list.
       expect(currentShaders[name as keyof typeof currentShaders]).toBe(
         // biome-ignore lint/performance/noDynamicNamespaceImportAccess: use the same exhaustive export key on the frozen reference.
@@ -45,7 +42,10 @@ describe("frozen renderer parity", () => {
   });
 
   test("does not emit unresolved shader interpolations", () => {
-    for (const shader of Object.values(currentShaders)) {
+    const shaderSources = Object.values(currentShaders).flatMap((value) =>
+      typeof value === "string" ? [value] : value,
+    );
+    for (const shader of shaderSources) {
       expect(shader).not.toContain("undefined");
       expect(shader).not.toContain("NaN");
       expect(shader.length).toBeGreaterThan(50);

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CartesianGrid,
   Line,
@@ -11,10 +11,16 @@ import {
 import {
   HeroWaveBackground,
   type HeroWaveBackgroundProps,
+  type HeroWavePerformanceSample,
   type HeroWaveQualityPreset,
   type HeroWaveRendererStatus,
 } from "../hero-wave-background";
 import { HeroWaveBackground as ReferenceHeroWaveBackground } from "../benchmark/reference/hero-wave-background";
+import {
+  FixedRing,
+  percentileSorted,
+  performanceTrendPercentPerMinute,
+} from "./benchmark-metrics";
 import { demoHref } from "./routing";
 import "./benchmark.css";
 
@@ -24,6 +30,8 @@ interface FrameSample {
   elapsed: number;
   fps: number;
   frameMs: number;
+  cpuMs: number | null;
+  gpuMs: number | null;
 }
 
 interface FrameSummary {
@@ -32,6 +40,11 @@ interface FrameSummary {
   p95Ms: number;
   dropped: number;
   frames: number;
+  cpuMs: number | null;
+  gpuMs: number | null;
+  gpuDisjoint: boolean;
+  trendPctPerMinute: number;
+  elapsedSeconds: number;
 }
 
 const EMPTY_SUMMARY: FrameSummary = {
@@ -40,21 +53,27 @@ const EMPTY_SUMMARY: FrameSummary = {
   p95Ms: 0,
   dropped: 0,
   frames: 0,
+  cpuMs: null,
+  gpuMs: null,
+  gpuDisjoint: false,
+  trendPctPerMinute: 0,
+  elapsedSeconds: 0,
 };
 
-function percentile(values: readonly number[], amount: number) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
-  return sorted[
-    Math.min(sorted.length - 1, Math.floor(amount * sorted.length))
-  ]!;
-}
+const FRAME_WINDOW_SIZE = 900;
+const PERFORMANCE_WINDOW_SIZE = 120;
+const TREND_WINDOW_SIZE = 1_800;
+const CHART_SAMPLE_COUNT = 180;
 
 function useFrameMeter() {
   const startedAt = useRef<number | null>(null);
-  const lastPublishedAt = useRef(0);
-  const frameTimes = useRef<number[]>([]);
-  const bucket = useRef<number[]>([]);
+  const frameTimes = useRef(new FixedRing<number>(FRAME_WINDOW_SIZE));
+  const performanceSamples = useRef(
+    new FixedRing<HeroWavePerformanceSample>(PERFORMANCE_WINDOW_SIZE),
+  );
+  const history = useRef(new FixedRing<FrameSample>(TREND_WINDOW_SIZE));
+  const bucket = useRef({ totalMs: 0, count: 0 });
+  const totalFrames = useRef(0);
   const [samples, setSamples] = useState<FrameSample[]>([]);
   const [summary, setSummary] = useState<FrameSummary>(EMPTY_SUMMARY);
 
@@ -64,44 +83,101 @@ function useFrameMeter() {
     startedAt.current ??= now;
     const frameMs = delta * 1000;
     frameTimes.current.push(frameMs);
-    bucket.current.push(frameMs);
-    if (frameTimes.current.length > 3_600) frameTimes.current.shift();
-    if (now - lastPublishedAt.current < 250) return;
+    bucket.current.totalMs += frameMs;
+    bucket.current.count += 1;
+    totalFrames.current += 1;
+  }, []);
 
-    const bucketValues = bucket.current;
-    const averageMs =
-      bucketValues.reduce((total, value) => total + value, 0) /
-      Math.max(bucketValues.length, 1);
-    const allValues = frameTimes.current;
-    lastPublishedAt.current = now;
-    bucket.current = [];
-    setSamples((current) => [
-      ...current.slice(-179),
-      {
-        elapsed: (now - (startedAt.current ?? now)) / 1000,
-        fps: 1000 / Math.max(averageMs, 0.001),
-        frameMs: averageMs,
-      },
-    ]);
-    setSummary({
+  const onPerformance = useCallback((sample: HeroWavePerformanceSample) => {
+    performanceSamples.current.push(sample);
+  }, []);
+
+  const publish = useCallback(() => {
+    const started = startedAt.current;
+    const currentBucket = bucket.current;
+    if (started === null || currentBucket.count === 0) return;
+    const now = performance.now();
+    const averageMs = currentBucket.totalMs / currentBucket.count;
+    currentBucket.totalMs = 0;
+    currentBucket.count = 0;
+
+    const performanceWindow = performanceSamples.current.toArray();
+    let cpuTotal = 0;
+    let gpuTotal = 0;
+    let gpuCount = 0;
+    let gpuDisjoint = false;
+    for (const performanceSample of performanceWindow) {
+      cpuTotal += performanceSample.cpuMs;
+      if (performanceSample.gpuMs !== undefined) {
+        gpuTotal += performanceSample.gpuMs;
+        gpuCount += 1;
+      }
+      gpuDisjoint ||= performanceSample.gpuDisjoint === true;
+    }
+    const cpuMs =
+      performanceWindow.length > 0 ? cpuTotal / performanceWindow.length : null;
+    const gpuMs = gpuCount > 0 ? gpuTotal / gpuCount : null;
+    const sample: FrameSample = {
+      elapsed: (now - started) / 1000,
       fps: 1000 / Math.max(averageMs, 0.001),
-      medianMs: percentile(allValues, 0.5),
-      p95Ms: percentile(allValues, 0.95),
-      dropped: allValues.filter((value) => value > 25).length,
-      frames: allValues.length,
+      frameMs: averageMs,
+      cpuMs,
+      gpuMs,
+    };
+    history.current.push(sample);
+    const historyValues = history.current.toArray();
+    const frameValues = frameTimes.current.toArray();
+    const sortedFrameValues = [...frameValues].sort(
+      (left, right) => left - right,
+    );
+    let dropped = 0;
+    for (const value of frameValues) {
+      if (value > 25) dropped += 1;
+    }
+    setSamples(historyValues.slice(-CHART_SAMPLE_COUNT));
+    setSummary({
+      fps: sample.fps,
+      medianMs: percentileSorted(sortedFrameValues, 0.5),
+      p95Ms: percentileSorted(sortedFrameValues, 0.95),
+      dropped,
+      frames: totalFrames.current,
+      cpuMs,
+      gpuMs,
+      gpuDisjoint,
+      trendPctPerMinute: performanceTrendPercentPerMinute(historyValues),
+      elapsedSeconds: sample.elapsed,
     });
   }, []);
 
+  useEffect(() => {
+    const interval = window.setInterval(publish, 1_000);
+    return () => window.clearInterval(interval);
+  }, [publish]);
+
   const reset = useCallback(() => {
     startedAt.current = null;
-    lastPublishedAt.current = 0;
-    frameTimes.current = [];
-    bucket.current = [];
+    frameTimes.current.clear();
+    performanceSamples.current.clear();
+    history.current.clear();
+    bucket.current.totalMs = 0;
+    bucket.current.count = 0;
+    totalFrames.current = 0;
     setSamples([]);
     setSummary(EMPTY_SUMMARY);
   }, []);
 
-  return { onFrame, reset, samples, summary };
+  return { onFrame, onPerformance, reset, samples, summary };
+}
+
+function formatOptionalMs(value: number | null, disjoint = false) {
+  if (disjoint) return "disjoint";
+  return value === null ? "n/a" : `${value.toFixed(2)} ms`;
+}
+
+function formatDuration(totalSeconds: number) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -328,6 +404,7 @@ export default function BenchmarkPage() {
             <HeroWaveBackground
               {...sharedProps}
               onFrame={refactorMeter.onFrame}
+              onPerformance={refactorMeter.onPerformance}
               onRendererStatus={setRefactorStatus}
             />
           </RendererPanel>
@@ -355,6 +432,14 @@ export default function BenchmarkPage() {
                 label=">25 ms"
                 value={String(referenceMeter.summary.dropped)}
               />
+              <Metric
+                label="Drift/min"
+                value={`${referenceMeter.summary.trendPctPerMinute.toFixed(2)}%`}
+              />
+              <Metric
+                label="Elapsed"
+                value={formatDuration(referenceMeter.summary.elapsedSeconds)}
+              />
             </div>
           </div>
           <div>
@@ -376,6 +461,25 @@ export default function BenchmarkPage() {
                 label=">25 ms"
                 value={String(refactorMeter.summary.dropped)}
               />
+              <Metric
+                label="CPU submit"
+                value={formatOptionalMs(refactorMeter.summary.cpuMs)}
+              />
+              <Metric
+                label="GPU"
+                value={formatOptionalMs(
+                  refactorMeter.summary.gpuMs,
+                  refactorMeter.summary.gpuDisjoint,
+                )}
+              />
+              <Metric
+                label="Drift/min"
+                value={`${refactorMeter.summary.trendPctPerMinute.toFixed(2)}%`}
+              />
+              <Metric
+                label="Elapsed"
+                value={formatDuration(refactorMeter.summary.elapsedSeconds)}
+              />
             </div>
           </div>
         </div>
@@ -384,9 +488,9 @@ export default function BenchmarkPage() {
           <div className="benchmark-chart-heading">
             <div>
               <span>Rolling performance</span>
-              <strong>FPS over the last 180 samples</strong>
+              <strong>FPS over the last 3 minutes</strong>
             </div>
-            <small>250 ms buckets · same scene and quality</small>
+            <small>1 s buckets · bounded soak-test buffers</small>
           </div>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart
