@@ -5,6 +5,7 @@ import {
   type HeroWaveRendererStatus,
   type HeroWaveTheme,
 } from "../hero-wave-background";
+import { demoHref } from "./routing";
 
 type DemoPreset = "aurora" | "signal" | "cursor";
 
@@ -25,7 +26,6 @@ export function App() {
     const shared: HeroWaveBackgroundProps = {
       theme,
       paused,
-      pathRenderer: "auto",
       quality: "high",
       fadeInDuration: 700,
       palette: {
@@ -153,6 +153,14 @@ export function App() {
           />
           {renderer?.renderer ?? "initializing"}
         </div>
+        <nav className="demo-dev-nav" aria-label="Development tools">
+          <a href={demoHref("/dev/hero-background", import.meta.env.BASE_URL)}>
+            Lab
+          </a>
+          <a href={demoHref("/dev/benchmark", import.meta.env.BASE_URL)}>
+            Benchmark
+          </a>
+        </nav>
       </header>
 
       <section className="demo-copy">

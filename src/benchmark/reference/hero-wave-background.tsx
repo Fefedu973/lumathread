@@ -46,6 +46,7 @@ import {
   type HeroWaveBackgroundImageConfig,
   type HeroWaveBackgroundProps,
   type HeroWaveColorStop,
+  type HeroWaveColorStopEasing,
   type HeroWaveCurveProfile,
   type HeroWaveCustomDeformer,
   type HeroWaveCustomDeformerCallback,
@@ -106,20 +107,6 @@ import {
   getHeroTrajectoryVerticalScale,
   HERO_DEFAULT_TRAJECTORY,
 } from "./trajectory";
-import { clamp, finite, finiteClamped } from "./math";
-import {
-  applyFilamentDisturbances,
-  findClosestFilamentLocation,
-  pruneFilamentDisturbanceImpulses,
-  type FilamentDisturbanceImpulse,
-  type ResolvedFilamentPointerConfig,
-} from "./interaction/filament-disturbance";
-import {
-  evaluateFadeEasing,
-  resolveFadeEasingPoints,
-  resolveFadeInEasing,
-} from "./animation/easing";
-import { buildHeroPaletteTextureData, hexToVec3 } from "./rendering/color";
 
 export * from "./types";
 export * from "./trajectory";
@@ -273,21 +260,6 @@ const INTERNAL_DEFAULTS = {
     magnification: 1.55,
     terrainDisplacement: 0.55,
   } satisfies ResolvedDotInteraction,
-  filamentInteraction: {
-    enabled: false,
-    target: "canvas",
-    pointerTypes: ["mouse", "pen", "touch"],
-    radius: 80,
-    strength: 0.045,
-    propagationSpeed: 0.72,
-    frequency: 2.8,
-    damping: 2.2,
-    spatialDecay: 0.8,
-    duration: 2.4,
-    cooldown: 0.07,
-    maxImpulses: 8,
-    direction: "push",
-  } satisfies ResolvedFilamentPointerConfig,
   glassText: {
     enabled: false,
     shape: "text",
@@ -709,7 +681,6 @@ interface Settings {
   profileBounds: ResolvedProfileBounds;
   material: ResolvedMaterial;
   follow: ResolvedFollow;
-  filamentInteraction: ResolvedFilamentPointerConfig;
   quality: ResolvedQuality;
   dotsEnabled: boolean;
   dotMode: HeroWaveDotMode;
@@ -876,6 +847,315 @@ const QUALITY_PRESETS: Record<
     quadrature: 2,
   },
 };
+
+function hexToVec3(hex: string): [number, number, number] {
+  const value = hex.replace("#", "");
+  const full =
+    value.length === 3
+      ? value
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : value;
+  const n = Number.parseInt(full, 16);
+  if (Number.isNaN(n) || full.length !== 6) {
+    return [1, 1, 1];
+  }
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function finite(value: number | undefined, fallback: number) {
+  return Number.isFinite(value) ? (value as number) : fallback;
+}
+
+function finiteClamped(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  return clamp(finite(value, fallback), minimum, maximum);
+}
+
+function resolveFadeInEasing(
+  input: HeroWaveFadeEasing | undefined,
+  fallback: string,
+) {
+  if (input && typeof input !== "string") {
+    const x1 = finiteClamped(input[0], 0, 0, 1);
+    const y1 = finiteClamped(input[1], 0, -4, 4);
+    const x2 = finiteClamped(input[2], 1, 0, 1);
+    const y2 = finiteClamped(input[3], 1, -4, 4);
+    return `cubic-bezier(${x1}, ${y1}, ${x2}, ${y2})`;
+  }
+  return typeof input === "string" ? input : fallback;
+}
+
+const FADE_EASING_POINTS: Record<
+  HeroWaveFadeEasingPreset,
+  readonly [number, number, number, number]
+> = {
+  linear: [0, 0, 1, 1],
+  ease: [0.25, 0.1, 0.25, 1],
+  "ease-in": [0.42, 0, 1, 1],
+  "ease-out": [0, 0, 0.58, 1],
+  "ease-in-out": [0.42, 0, 0.58, 1],
+};
+
+function resolveFadeEasingPoints(
+  input: HeroWaveFadeEasing | undefined,
+  fallback: readonly [number, number, number, number],
+): readonly [number, number, number, number] {
+  if (typeof input === "string") return FADE_EASING_POINTS[input];
+  if (!input) return fallback;
+  return [
+    finiteClamped(input[0], fallback[0], 0, 1),
+    finiteClamped(input[1], fallback[1], -4, 4),
+    finiteClamped(input[2], fallback[2], 0, 1),
+    finiteClamped(input[3], fallback[3], -4, 4),
+  ];
+}
+
+function cubicBezierCoordinate(first: number, second: number, amount: number) {
+  const inverse = 1 - amount;
+  return (
+    3 * inverse * inverse * amount * first +
+    3 * inverse * amount * amount * second +
+    amount * amount * amount
+  );
+}
+
+function evaluateFadeEasing(
+  progress: number,
+  easing: readonly [number, number, number, number],
+) {
+  const target = clamp(progress, 0, 1);
+  let lower = 0;
+  let upper = 1;
+  for (let iteration = 0; iteration < 12; iteration++) {
+    const amount = (lower + upper) * 0.5;
+    if (cubicBezierCoordinate(easing[0], easing[2], amount) < target) {
+      lower = amount;
+    } else {
+      upper = amount;
+    }
+  }
+  return cubicBezierCoordinate(easing[1], easing[3], (lower + upper) * 0.5);
+}
+
+function srgbChannelToLinear(value: number) {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function linearChannelToSrgb(value: number) {
+  const clamped = Math.max(value, 0);
+  return clamped <= 0.0031308
+    ? clamped * 12.92
+    : 1.055 * clamped ** (1 / 2.4) - 0.055;
+}
+
+function linearRgbToOklab(
+  color: readonly [number, number, number],
+): [number, number, number] {
+  const l =
+    0.4122214708 * color[0] + 0.5363325363 * color[1] + 0.0514459929 * color[2];
+  const m =
+    0.2119034982 * color[0] + 0.6806995451 * color[1] + 0.1073969566 * color[2];
+  const valueS =
+    0.0883024619 * color[0] + 0.2817188376 * color[1] + 0.6299787005 * color[2];
+  const lRoot = Math.cbrt(Math.max(l, 0));
+  const mRoot = Math.cbrt(Math.max(m, 0));
+  const sRoot = Math.cbrt(Math.max(valueS, 0));
+  return [
+    0.2104542553 * lRoot + 0.793617785 * mRoot - 0.0040720468 * sRoot,
+    1.9779984951 * lRoot - 2.428592205 * mRoot + 0.4505937099 * sRoot,
+    0.0259040371 * lRoot + 0.7827717662 * mRoot - 0.808675766 * sRoot,
+  ];
+}
+
+function oklabToLinearRgb(
+  color: readonly [number, number, number],
+): [number, number, number] {
+  const lRoot = color[0] + 0.3963377774 * color[1] + 0.2158037573 * color[2];
+  const mRoot = color[0] - 0.1055613458 * color[1] - 0.0638541728 * color[2];
+  const sRoot = color[0] - 0.0894841775 * color[1] - 1.291485548 * color[2];
+  const l = lRoot ** 3;
+  const m = mRoot ** 3;
+  const valueS = sRoot ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * valueS,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * valueS,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * valueS,
+  ];
+}
+
+function applyStopEasing(amount: number, easing: HeroWaveColorStopEasing) {
+  if (easing === "hold") return 0;
+  if (easing === "smooth") return amount * amount * (3 - 2 * amount);
+  return amount;
+}
+
+interface NormalizedColorStop {
+  offset: number;
+  easing: HeroWaveColorStopEasing;
+  srgb: [number, number, number];
+}
+
+function normalizeColorStops(
+  source: readonly HeroWaveColorStop[],
+  reverse: boolean,
+) {
+  const colors = source.length > 0 ? source : INTERNAL_DEFAULTS.colors;
+  const offsets: Array<number | undefined> = colors.map((stop) =>
+    Number.isFinite(stop.offset)
+      ? clamp(stop.offset as number, 0, 1)
+      : undefined,
+  );
+  if (!offsets.some((offset) => offset !== undefined)) {
+    for (let index = 0; index < offsets.length; index++) {
+      offsets[index] = index / Math.max(offsets.length - 1, 1);
+    }
+  } else {
+    if (offsets[0] === undefined) offsets[0] = 0;
+    if (offsets[offsets.length - 1] === undefined)
+      offsets[offsets.length - 1] = 1;
+    let left = 0;
+    while (left < offsets.length - 1) {
+      let right = left + 1;
+      while (right < offsets.length && offsets[right] === undefined) right += 1;
+      const from = offsets[left] ?? 0;
+      const to = Math.max(offsets[right] ?? from, from);
+      const span = right - left;
+      for (let index = 1; index < span; index++)
+        offsets[left + index] = from + ((to - from) * index) / span;
+      offsets[right] = to;
+      left = right;
+    }
+  }
+  const normalized: NormalizedColorStop[] = colors
+    .map((stop, index) => ({
+      offset: offsets[index] ?? index / Math.max(colors.length - 1, 1),
+      easing: (stop as HeroWaveColorStop).easing ?? "linear",
+      srgb: hexToVec3(stop.color),
+    }))
+    .sort((left, right) => left.offset - right.offset);
+  if (normalized.length === 1) {
+    normalized.push({ ...normalized[0]!, offset: 1 });
+    normalized[0]!.offset = 0;
+  }
+  if (!reverse) return normalized;
+  return normalized
+    .map((stop) => ({ ...stop, offset: 1 - stop.offset }))
+    .reverse();
+}
+
+function interpolatePaletteColor(
+  left: NormalizedColorStop,
+  right: NormalizedColorStop,
+  amount: number,
+  interpolation: HeroWavePaletteInterpolation,
+): [number, number, number] {
+  const eased = applyStopEasing(clamp(amount, 0, 1), left.easing);
+  if (interpolation === "srgb") {
+    return [0, 1, 2].map(
+      (index) =>
+        left.srgb[index]! + (right.srgb[index]! - left.srgb[index]!) * eased,
+    ) as [number, number, number];
+  }
+  const leftLinear = left.srgb.map(srgbChannelToLinear) as [
+    number,
+    number,
+    number,
+  ];
+  const rightLinear = right.srgb.map(srgbChannelToLinear) as [
+    number,
+    number,
+    number,
+  ];
+  let mixed: [number, number, number];
+  if (interpolation === "oklab") {
+    const a = linearRgbToOklab(leftLinear);
+    const b = linearRgbToOklab(rightLinear);
+    mixed = oklabToLinearRgb([
+      a[0] + (b[0] - a[0]) * eased,
+      a[1] + (b[1] - a[1]) * eased,
+      a[2] + (b[2] - a[2]) * eased,
+    ]);
+  } else {
+    mixed = [0, 1, 2].map(
+      (index) =>
+        leftLinear[index]! + (rightLinear[index]! - leftLinear[index]!) * eased,
+    ) as [number, number, number];
+  }
+  return mixed.map((value) => clamp(linearChannelToSrgb(value), 0, 1)) as [
+    number,
+    number,
+    number,
+  ];
+}
+
+function paletteColorAt(
+  stops: readonly NormalizedColorStop[],
+  progress: number,
+  interpolation: HeroWavePaletteInterpolation,
+  cyclic: boolean,
+) {
+  const position = cyclic ? ((progress % 1) + 1) % 1 : clamp(progress, 0, 1);
+  if (
+    cyclic &&
+    (position < stops[0]!.offset || position >= stops[stops.length - 1]!.offset)
+  ) {
+    const left = stops[stops.length - 1]!;
+    const right = stops[0]!;
+    const span = 1 - left.offset + right.offset;
+    const adjusted = position < right.offset ? position + 1 : position;
+    return interpolatePaletteColor(
+      left,
+      right,
+      span > 0 ? (adjusted - left.offset) / span : 0,
+      interpolation,
+    );
+  }
+  let rightIndex = 1;
+  while (rightIndex < stops.length && position > stops[rightIndex]!.offset)
+    rightIndex += 1;
+  const right = stops[Math.min(stops.length - 1, rightIndex)]!;
+  const left = stops[Math.max(0, rightIndex - 1)] ?? right;
+  return interpolatePaletteColor(
+    left,
+    right,
+    (position - left.offset) / Math.max(right.offset - left.offset, 0.000001),
+    interpolation,
+  );
+}
+
+function buildHeroPaletteTextureData(
+  source: readonly HeroWaveColorStop[],
+  interpolation: HeroWavePaletteInterpolation = "srgb",
+  reverse = false,
+) {
+  const stops = normalizeColorStops(source, reverse);
+  const data = new Uint8Array(HERO_PALETTE_TEXTURE_WIDTH * 4);
+  const half = HERO_PALETTE_TEXTURE_WIDTH / 2;
+  const write = (index: number, progress: number, cyclic: boolean) => {
+    const color = paletteColorAt(stops, progress, interpolation, cyclic);
+    const offset = index * 4;
+    data[offset] = Math.round(color[0] * 255);
+    data[offset + 1] = Math.round(color[1] * 255);
+    data[offset + 2] = Math.round(color[2] * 255);
+    data[offset + 3] = 255;
+  };
+  for (let index = 0; index < half; index++) {
+    const progress = index / Math.max(half - 1, 1);
+    write(index, progress, false);
+    write(half + index, progress, true);
+  }
+  return data;
+}
 
 function wrapProfilePosition(value: number, wrap: HeroWaveProfileWrap) {
   if (wrap === "repeat") return ((value % 1) + 1) % 1;
@@ -1314,7 +1594,6 @@ function resolveOneSettings(
   const backgroundImageInput = input.backgroundImage;
   const musicVisualizerInput = input.musicVisualizer;
   const followInput = input.interaction?.follow;
-  const filamentInteractionInput = input.interaction?.filament;
 
   const motionMode =
     motion?.mode ?? inherited?.motionMode ?? INTERNAL_DEFAULTS.motionMode;
@@ -1756,80 +2035,6 @@ function resolveOneSettings(
       -4,
       4,
     ),
-  };
-  const inheritedFilamentInteraction =
-    inherited?.filamentInteraction ?? INTERNAL_DEFAULTS.filamentInteraction;
-  const filamentInteraction: ResolvedFilamentPointerConfig = {
-    enabled:
-      filamentInteractionInput?.enabled ?? inheritedFilamentInteraction.enabled,
-    target:
-      filamentInteractionInput?.target ?? inheritedFilamentInteraction.target,
-    pointerTypes:
-      filamentInteractionInput?.pointerTypes ??
-      inheritedFilamentInteraction.pointerTypes,
-    radius: finiteClamped(
-      filamentInteractionInput?.radius,
-      inheritedFilamentInteraction.radius,
-      4,
-      1200,
-    ),
-    strength: finiteClamped(
-      filamentInteractionInput?.strength,
-      inheritedFilamentInteraction.strength,
-      0,
-      1,
-    ),
-    propagationSpeed: finiteClamped(
-      filamentInteractionInput?.propagationSpeed,
-      inheritedFilamentInteraction.propagationSpeed,
-      0.01,
-      16,
-    ),
-    frequency: finiteClamped(
-      filamentInteractionInput?.frequency,
-      inheritedFilamentInteraction.frequency,
-      0.05,
-      64,
-    ),
-    damping: finiteClamped(
-      filamentInteractionInput?.damping,
-      inheritedFilamentInteraction.damping,
-      0,
-      32,
-    ),
-    spatialDecay: finiteClamped(
-      filamentInteractionInput?.spatialDecay,
-      inheritedFilamentInteraction.spatialDecay,
-      0,
-      32,
-    ),
-    duration: finiteClamped(
-      filamentInteractionInput?.duration,
-      inheritedFilamentInteraction.duration,
-      0.05,
-      30,
-    ),
-    cooldown: finiteClamped(
-      filamentInteractionInput?.cooldown,
-      inheritedFilamentInteraction.cooldown,
-      0,
-      5,
-    ),
-    maxImpulses: Math.max(
-      1,
-      Math.min(
-        32,
-        Math.trunc(
-          finite(
-            filamentInteractionInput?.maxImpulses,
-            inheritedFilamentInteraction.maxImpulses,
-          ),
-        ),
-      ),
-    ),
-    direction:
-      filamentInteractionInput?.direction ??
-      inheritedFilamentInteraction.direction,
   };
   const inheritedGlass = inherited?.glassText ?? INTERNAL_DEFAULTS.glassText;
   const uniformMagnification = glassInput?.magnification;
@@ -2280,7 +2485,6 @@ function resolveOneSettings(
     profileBounds: resolveProfileBounds(profiles),
     material,
     follow,
-    filamentInteraction,
     quality,
     dotsEnabled: dots?.enabled ?? inherited?.dotsEnabled ?? true,
     dotMode: dots?.mode ?? inherited?.dotMode ?? INTERNAL_DEFAULTS.dotMode,
@@ -2366,7 +2570,6 @@ function resolveOneSettings(
     Math.abs(settings.pathTransform.anchorY - 0.5) <= 0.000001;
   settings.requiresPathPipeline =
     settings.pathMode !== "sine" ||
-    settings.filamentInteraction.enabled ||
     settings.follow.activation !== "path-mode" ||
     (settings.musicVisualizer.enabled &&
       settings.musicVisualizer.deformation > 0.000001) ||
@@ -4772,7 +4975,6 @@ interface FilamentGeometryState {
   deformationKey: number;
   meshKey: number;
   meshRevision: number;
-  disturbanceActive: boolean;
   settingsReference: Settings | null;
   settingsSizeRevision: number;
   sourceSettingsKey: number;
@@ -4783,19 +4985,11 @@ interface FilamentGeometryState {
   followSamples: CurveSample[];
   morphSamples: CurveSample[];
   temporarySamples: CurveSample[];
-  disturbedSamples: CurveSample[];
-  renderSamples: readonly CurveSample[];
   temporaryAnchors: FollowAnchor[];
   passSamples: [CurveSample[], CurveSample[], CurveSample[]];
   segmentData: [Float32Array, Float32Array, Float32Array];
   segmentCounts: [number, number, number];
   closed: boolean;
-}
-
-interface FilamentDisturbanceRuntime {
-  impulses: FilamentDisturbanceImpulse[];
-  lastTriggerTime: number;
-  alternateSign: number;
 }
 
 interface FollowRuntimeState {
@@ -4870,7 +5064,6 @@ function createFilamentGeometryState(id: string): FilamentGeometryState {
     deformationKey: -1,
     meshKey: -1,
     meshRevision: 0,
-    disturbanceActive: false,
     settingsReference: null,
     settingsSizeRevision: -1,
     sourceSettingsKey: -1,
@@ -4881,8 +5074,6 @@ function createFilamentGeometryState(id: string): FilamentGeometryState {
     followSamples: [],
     morphSamples: [],
     temporarySamples: [],
-    disturbedSamples: [],
-    renderSamples: [],
     temporaryAnchors: [],
     passSamples: [[], [], []],
     segmentData: [
@@ -5361,7 +5552,6 @@ const HdrHeroWaveBackground = forwardRef<
     const styleTextures = new Map<string, FilamentStyleTextures>();
     const geometryStates = new Map<string, FilamentGeometryState>();
     const followStates = new Map<string, FollowRuntimeState>();
-    const disturbanceStates = new Map<string, FilamentDisturbanceRuntime>();
     const hueMatrix = new Float32Array(9);
     const zeroFloat4 = new Float32Array(4);
     const followModifierScratch = createRuntimeModifiers();
@@ -5396,18 +5586,6 @@ const HdrHeroWaveBackground = forwardRef<
       if (!state) {
         state = createFollowRuntimeState();
         followStates.set(id, state);
-      }
-      return state;
-    };
-    const getDisturbanceState = (id: string) => {
-      let state = disturbanceStates.get(id);
-      if (!state) {
-        state = {
-          impulses: [],
-          lastTriggerTime: Number.NEGATIVE_INFINITY,
-          alternateSign: 1,
-        };
-        disturbanceStates.set(id, state);
       }
       return state;
     };
@@ -5453,7 +5631,6 @@ const HdrHeroWaveBackground = forwardRef<
             settings.colors,
             settings.paletteInterpolation,
             settings.paletteReverse,
-            INTERNAL_DEFAULTS.colors,
           ),
         );
         entry.paletteHash = nextPaletteHash;
@@ -6096,7 +6273,6 @@ const HdrHeroWaveBackground = forwardRef<
     let running = true;
     let previousDrawTimestamp: number | null = null;
     let clockTime = resolvedSettings.initialTime;
-    let interactionTime = 0;
     currentTimeRef.current = clockTime;
     let inViewport = true;
     let reducedMotion = false;
@@ -6651,68 +6827,6 @@ const HdrHeroWaveBackground = forwardRef<
       }
     };
 
-    const updateFilamentDisturbance = (
-      settings: Settings,
-      clientX: number,
-      clientY: number,
-      pointerType: string,
-    ) => {
-      const config = settings.filamentInteraction;
-      if (
-        !config.enabled ||
-        !config.pointerTypes.includes(pointerType as HeroWavePointerType)
-      ) {
-        return false;
-      }
-      const insideCanvas =
-        clientX >= canvasRect.left &&
-        clientX <= canvasRect.right &&
-        clientY >= canvasRect.top &&
-        clientY <= canvasRect.bottom;
-      if (config.target === "canvas" && !insideCanvas) return false;
-
-      const geometry = geometryStates.get(settings.id);
-      const samples = geometry?.renderSamples;
-      if (!geometry || !samples || samples.length < 2) return false;
-      const pointerX =
-        (clientX - canvasRect.left) / Math.max(canvasRect.width, 1);
-      const pointerY =
-        1 - (clientY - canvasRect.top) / Math.max(canvasRect.height, 1);
-      const closest = findClosestFilamentLocation(
-        samples,
-        geometry.closed,
-        pointerX,
-        pointerY,
-        Math.max(canvasRect.width, 1),
-        Math.max(canvasRect.height, 1),
-      );
-      if (!closest || closest.distanceCssPx > config.radius) return false;
-
-      const state = getDisturbanceState(settings.id);
-      if (interactionTime - state.lastTriggerTime < config.cooldown) {
-        return false;
-      }
-      const proximity = clamp(1 - closest.distanceCssPx / config.radius, 0, 1);
-      const falloff = proximity * proximity * (3 - 2 * proximity);
-      let normalSign = closest.normalSign;
-      if (config.direction === "push") normalSign *= -1;
-      else if (config.direction === "alternate") {
-        normalSign = state.alternateSign;
-        state.alternateSign *= -1;
-      }
-      state.impulses.push({
-        progress: closest.progress,
-        startedAt: interactionTime,
-        strength: config.strength * falloff,
-        normalSign,
-      });
-      if (state.impulses.length > config.maxImpulses) {
-        state.impulses.splice(0, state.impulses.length - config.maxImpulses);
-      }
-      state.lastTriggerTime = interactionTime;
-      return true;
-    };
-
     const onPointerMove = (event: PointerEvent) => {
       if (rectDirty) {
         canvasRect = canvas.getBoundingClientRect();
@@ -6754,36 +6868,20 @@ const HdrHeroWaveBackground = forwardRef<
         Math.abs(previousDotPointerX - dotPointerX) > 0.0001 ||
         Math.abs(previousDotPointerY - dotPointerY) > 0.0001;
       const scene = getActiveScene(root);
-      const hasFollowInput = scene.some(acceptsFollowInput);
-      const hasFilamentInteraction = scene.some(
-        (settings) => settings.filamentInteraction.enabled,
-      );
-      if (!hasFollowInput && !hasFilamentInteraction) {
+      if (!scene.some(acceptsFollowInput)) {
         if (dotPointerChanged) requestFrame();
         return;
       }
       for (const sample of samples) {
         const sampleTime = pointerEventTimeSeconds(sample.timeStamp);
         for (const filament of scene) {
-          const pointerType =
-            sample.pointerType || event.pointerType || "mouse";
-          if (hasFollowInput) {
-            updateFilamentPointer(
-              filament,
-              sample.clientX,
-              sample.clientY,
-              sampleTime,
-              pointerType,
-            );
-          }
-          if (hasFilamentInteraction) {
-            updateFilamentDisturbance(
-              filament,
-              sample.clientX,
-              sample.clientY,
-              pointerType,
-            );
-          }
+          updateFilamentPointer(
+            filament,
+            sample.clientX,
+            sample.clientY,
+            sampleTime,
+            sample.pointerType || event.pointerType || "mouse",
+          );
         }
       }
       requestFrame();
@@ -7575,40 +7673,7 @@ const HdrHeroWaveBackground = forwardRef<
       } else {
         state.deformationKey = deformationKey;
       }
-      const disturbanceState = disturbanceStates.get(settings.id);
-      if (disturbanceState) {
-        pruneFilamentDisturbanceImpulses(
-          disturbanceState.impulses,
-          interactionTime,
-          settings.filamentInteraction.duration,
-        );
-        if (!settings.filamentInteraction.enabled) {
-          disturbanceState.impulses.length = 0;
-        }
-      }
-      const disturbanceActive = Boolean(
-        settings.filamentInteraction.enabled &&
-          disturbanceState &&
-          disturbanceState.impulses.length > 0,
-      );
-      if (disturbanceActive) {
-        renderSamples = applyFilamentDisturbances(
-          renderSamples,
-          state.closed,
-          canvasWidth,
-          canvasHeight,
-          interactionTime,
-          settings.filamentInteraction,
-          disturbanceState?.impulses ?? [],
-          state.disturbedSamples,
-        ) as CurveSample[];
-      }
-      if (state.disturbanceActive !== disturbanceActive) {
-        state.meshKey = -1;
-        state.disturbanceActive = disturbanceActive;
-      }
-      state.renderSamples = renderSamples;
-      const dynamic = sourceDynamic || propagationDynamic || disturbanceActive;
+      const dynamic = sourceDynamic || propagationDynamic;
       const materialKey = hashMix(deformationKey, state.materialSettingsKey);
       if (!dynamic && state.meshKey === materialKey) {
         return {
@@ -8966,9 +9031,6 @@ const HdrHeroWaveBackground = forwardRef<
       for (const id of followStates.keys()) {
         if (!activeIds.has(id)) followStates.delete(id);
       }
-      for (const id of disturbanceStates.keys()) {
-        if (!activeIds.has(id)) disturbanceStates.delete(id);
-      }
       for (const id of cycleStates.keys()) {
         if (!activeIds.has(id)) cycleStates.delete(id);
       }
@@ -9079,13 +9141,6 @@ const HdrHeroWaveBackground = forwardRef<
         return false;
       });
 
-    const disturbanceNeedsAnimation = (scene: readonly Settings[]) =>
-      scene.some(
-        (settings) =>
-          settings.filamentInteraction.enabled &&
-          (disturbanceStates.get(settings.id)?.impulses.length ?? 0) > 0,
-      );
-
     function loop(timestamp: number) {
       frameScheduled = false;
       if (!running) return;
@@ -9111,19 +9166,18 @@ const HdrHeroWaveBackground = forwardRef<
         clockTime = requestedSeek;
         seekRequestRef.current = null;
       }
-      const autonomousPaused =
-        root.paused ||
-        manualPausedRef.current ||
-        (root.respectReducedMotion && reducedMotion);
       if (root.controlledTime !== undefined) {
         clockTime = root.controlledTime;
       } else {
+        const autonomousPaused =
+          root.paused ||
+          manualPausedRef.current ||
+          (root.respectReducedMotion && reducedMotion);
         if (!autonomousPaused) {
           clockTime += frameDelta * root.playbackRate;
           if (Math.abs(clockTime) > 32768) clockTime %= 4096;
         }
       }
-      if (!autonomousPaused) interactionTime += frameDelta;
       currentTimeRef.current = clockTime;
       draw(frameDelta);
       const clockRuns =
@@ -9132,9 +9186,7 @@ const HdrHeroWaveBackground = forwardRef<
         !manualPausedRef.current &&
         !(root.respectReducedMotion && reducedMotion);
       const interactionRuns =
-        !root.paused &&
-        !manualPausedRef.current &&
-        (followNeedsAnimation(scene) || disturbanceNeedsAnimation(scene));
+        !root.paused && !manualPausedRef.current && followNeedsAnimation(scene);
       if (clockRuns || interactionRuns) requestFrame();
     }
 

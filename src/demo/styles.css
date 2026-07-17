@@ -208,3 +208,29 @@ button {
     overflow-x: auto;
   }
 }
+.route-loading {
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  background: #050809;
+  color: #829087;
+  font: 500 12px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.demo-dev-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.demo-dev-nav a {
+  padding: 7px 9px;
+  border: 1px solid currentColor;
+  color: inherit;
+  text-decoration: none;
+  font-size: 12px;
+  opacity: 0.72;
+}
+
+.demo-dev-nav a:hover {
+  opacity: 1;
+}

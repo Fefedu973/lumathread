@@ -16,7 +16,6 @@ The repository is private while the API and packaging are being stabilized.
 - Flat and terrain dot fields with pointer interaction
 - Refractive text or SVG glass masks
 - Music-reactive deformation and material response
-- WebGL1 legacy fallback when the exact renderer is unavailable
 - Dark and light rendering themes
 
 ## Development
@@ -26,7 +25,23 @@ bun install
 bun run dev
 ```
 
-The Vite demo exposes three compact presets and reports the active renderer.
+The Vite homepage exposes three compact presets and reports the active
+renderer. The complete configuration laboratory is available at:
+
+```text
+http://localhost:5173/dev/hero-background
+```
+
+The regression benchmark compares the frozen extraction snapshot with the
+current renderer under the same deterministic scene. It reports rolling FPS,
+median and P95 frame times, and frames over 25 ms:
+
+```text
+http://localhost:5173/dev/benchmark
+```
+
+Both routes are part of the static GitHub Pages build. The deployment workflow
+publishes them under the repository prefix after changes reach `main`.
 
 ## Build
 
@@ -68,11 +83,41 @@ export function HeroBackground() {
 `HeroWaveBackground` and `HeroWaveScene` remain exported under their original
 names for source compatibility. `LumaThread` and `LumaThreadScene` are aliases.
 
+### Pointer-triggered filament waves
+
+Pointer interaction can disturb an existing path without replacing it with a
+cursor-follow trail. It is disabled by default and only switches a sine scene
+to the HDR path pipeline when explicitly enabled.
+
+```tsx
+<LumaThread
+  path={{ mode: "organic" }}
+  interaction={{
+    filament: {
+      enabled: true,
+      target: "canvas",
+      radius: 80,
+      strength: 0.045,
+      propagationSpeed: 0.72,
+      frequency: 2.8,
+      damping: 2.2,
+      spatialDecay: 0.8,
+      duration: 2.4,
+      direction: "push",
+    },
+  }}
+/>
+```
+
+Use `direction: "pull"` to attract the filament toward the pointer or
+`"alternate"` to alternate the impulse side. Closed paths propagate across the
+shortest side of their seam.
+
 ## Browser requirements
 
-The exact free-path renderer prefers WebGL2 with floating-point render targets
-and blending. `pathRenderer="auto"` falls back to the included WebGL1 renderer
-when required capabilities are missing. The analytic sine renderer remains the
+Free paths use the exact HDR renderer and require WebGL2 with floating-point
+render targets and blending. Unsupported devices are reported explicitly; no
+approximate legacy renderer is bundled. The analytic sine renderer remains the
 least expensive path.
 
 ## Origin and status
