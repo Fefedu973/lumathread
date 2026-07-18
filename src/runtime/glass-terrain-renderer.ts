@@ -60,6 +60,7 @@ export function createGlassTerrainRenderer(
       settings.glassText.fontSize,
       settings.glassText.lineHeight,
       settings.glassText.letterSpacing,
+      settings.glassText.textWrap,
       settings.glassText.centerX,
       settings.glassText.centerY,
       settings.glassText.maxWidth,

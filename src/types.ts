@@ -464,6 +464,20 @@ export interface HeroWaveDotsConfig {
   terrain?: HeroWaveTerrainDotsConfig;
   interaction?: HeroWaveDotInteractionConfig;
 }
+export type HeroWaveDomTarget =
+  | string
+  | HTMLElement
+  | { readonly current: HTMLElement | null };
+export interface HeroWaveGlassTextDomConfig {
+  /** CSS selector, element, or React ref whose layout the glass text mirrors. */
+  target: HeroWaveDomTarget;
+  /** Reads the rendered element text, including explicit line breaks. */
+  syncContent?: boolean;
+  /** Reads font family, weight, size, line height, and letter spacing. */
+  syncTypography?: boolean;
+  /** Extra room around the measured element, in CSS pixels. */
+  padding?: number | { x?: number; y?: number };
+}
 export interface HeroWaveGlassTextConfig {
   enabled?: boolean;
   shape?: "text" | "svg";
@@ -475,12 +489,16 @@ export interface HeroWaveGlassTextConfig {
   fontSize?: number;
   lineHeight?: number;
   letterSpacing?: number;
+  /** Automatic word wrapping, or explicit newlines only. */
+  wrap?: "auto" | "explicit";
   /** Center of the glass mask in normalized canvas coordinates. */
   center?: { x?: number; y?: number };
   /** Maximum text width as a fraction of the canvas width. */
   maxWidth?: number;
   /** Maximum text height as a fraction of the canvas height. */
   maxHeight?: number;
+  /** Keeps a text mask aligned with a real DOM element. Text masks only. */
+  dom?: HeroWaveGlassTextDomConfig;
   refraction?: number;
   /** Pulls background colors around the glass boundary, in CSS pixels. */
   edgeWrap?: number;

@@ -204,12 +204,10 @@ export function renderGlassTextMask(
   const letterSpacing = settings.letterSpacing * dpr;
   const layoutAtSize = (fontSize: number) => {
     context.font = `${settings.fontWeight} ${fontSize}px ${settings.fontFamily}`;
-    const lines = wrapGlassText(
-      context,
-      settings.text,
-      maximumWidth,
-      letterSpacing,
-    );
+    const lines =
+      settings.textWrap === "explicit"
+        ? settings.text.split("\n")
+        : wrapGlassText(context, settings.text, maximumWidth, letterSpacing);
     const lineHeight = fontSize * settings.lineHeight;
     const textWidth = lines.reduce(
       (maximum, line) =>

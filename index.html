@@ -8,10 +8,22 @@
       name="description"
       content="LumaThread — a composable WebGL luminous filament renderer for React."
     />
-    <title>LumaThread Lab</title>
+    <title>LumaThread — Luminous WebGL filaments for React</title>
+    <script>
+      (() => {
+        try {
+          const stored = localStorage.getItem("lumathread-theme");
+          const dark =
+            stored === "dark" ||
+            ((stored === null || stored === "system") &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.classList.toggle("dark", dark);
+        } catch {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/demo/main.tsx"></script>
+    <script type="module" src="/site/main.tsx"></script>
   </body>
 </html>

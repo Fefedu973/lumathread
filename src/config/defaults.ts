@@ -202,6 +202,7 @@ export const INTERNAL_DEFAULTS = {
     fontSize: 96,
     lineHeight: 0.94,
     letterSpacing: -2,
+    textWrap: "auto",
     centerX: 0.5,
     centerY: 0.5,
     maxWidth: 0.82,

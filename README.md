@@ -15,6 +15,7 @@ The repository is private while the API and packaging are being stabilized.
 - Multi-filament scenes
 - Flat and terrain dot fields with pointer interaction
 - Refractive text or SVG glass masks
+- Glass-only blur/fade entrances and optional DOM-aligned typography
 - Music-reactive deformation and material response
 - Dark and light rendering themes
 
@@ -25,25 +26,20 @@ bun install
 bun run dev
 ```
 
-The Vite homepage exposes three compact presets and reports the active
-renderer. The complete configuration laboratory is available at:
+The repository is split in two: `src/` holds the library (the only code
+published to `dist/`), and `site/` holds the documentation website — a
+shadcn/ui + Tailwind CSS v4 app configured through `components.json`.
+
+The homepage documents the component with live demos, a preset showcase, and
+the complete props reference. The full configuration laboratory is available
+at:
 
 ```text
-http://localhost:5173/dev/hero-background
+http://localhost:5173/lab
 ```
 
-The regression benchmark compares the frozen extraction snapshot with the
-current renderer under the same deterministic scene. It reports rolling FPS,
-median and P95 frame times, frames over 25 ms, normalized long-run FPS drift,
-CPU submission time, and asynchronous GPU time when timer queries are
-available. All measurement and chart buffers are bounded so the benchmark's
-own cost does not increase during a soak test:
-
-```text
-http://localhost:5173/dev/benchmark
-```
-
-Both routes are part of the static GitHub Pages build. The deployment workflow
+(The lab's previous address, `/dev/hero-background`, still resolves.) Both
+routes are part of the static GitHub Pages build. The deployment workflow
 publishes them under the repository prefix after changes reach `main`.
 
 ## Build
@@ -115,6 +111,62 @@ to the HDR path pipeline when explicitly enabled.
 Use `direction: "pull"` to attract the filament toward the pointer or
 `"alternate"` to alternate the impulse side. Closed paths propagate across the
 shortest side of their seam.
+
+### Glass text entrance and DOM tracking
+
+The glass pass has its own entrance. It does not change the canvas fade or any
+regular DOM content: only the refractive text/SVG mask fades from a blurred,
+offset state into its final material.
+
+```tsx
+<LumaThread
+  glassText={{
+    enabled: true,
+    text: "Replay the market.",
+    intro: {
+      delay: 120,
+      duration: 600,
+      blur: 12,
+      offsetY: 16,
+      easing: [0.21, 0.47, 0.32, 0.98],
+    },
+  }}
+/>
+```
+
+A text mask can also mirror an actual DOM heading. The target may be a CSS
+selector, an `HTMLElement`, or a React ref. LumaThread observes the element,
+the canvas, font loading, scrolling, and content changes; it does not hide or
+otherwise mutate the source element. Browser-created line breaks, including
+`text-wrap: balance`, are measured from the rendered glyphs and preserved by
+the canvas mask.
+
+```tsx
+const titleRef = useRef<HTMLHeadingElement>(null);
+
+return (
+  <section className="hero">
+    <LumaThread
+      glassText={{
+        enabled: true,
+        dom: {
+          target: titleRef,
+          syncContent: true,
+          syncTypography: true,
+          padding: { x: 12, y: 5 },
+        },
+        intro: { duration: 600, blur: 12, offsetY: 16 },
+      }}
+    />
+    <h1 ref={titleRef}>Replay the market.</h1>
+  </section>
+);
+```
+
+Set `syncContent` or `syncTypography` to `false` to retain the corresponding
+manual `glassText` values while still following the target bounds. DOM
+tracking is available for text masks; SVG masks continue to use their explicit
+view box and placement.
 
 ## Browser requirements
 

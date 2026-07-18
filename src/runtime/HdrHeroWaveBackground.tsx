@@ -42,6 +42,7 @@ import {
 import { useHeroWaveRenderer } from "./use-hero-wave-renderer";
 
 import { useMusicVisualizer } from "../audio/use-music-visualizer";
+import { useGlassTextDomTarget } from "./use-glass-text-dom-target";
 
 const HdrHeroWaveBackground = forwardRef<
   HeroWaveBackgroundHandle,
@@ -88,10 +89,18 @@ const HdrHeroWaveBackground = forwardRef<
   const settingsRef = useRef<Settings>(null as unknown as Settings);
   const settingsInputRef = useRef<Record<string, unknown> | null>(null);
   const [contextEpoch, setContextEpoch] = useState(0);
-  const settingsInput = inputSettings as Record<string, unknown>;
+  const trackedGlassText = useGlassTextDomTarget(
+    canvasRef,
+    inputSettings.glassText,
+  );
+  const effectiveInputSettings =
+    trackedGlassText === inputSettings.glassText
+      ? inputSettings
+      : { ...inputSettings, glassText: trackedGlassText };
+  const settingsInput = effectiveInputSettings as Record<string, unknown>;
   if (!shallowSettingsInputEqual(settingsInputRef.current, settingsInput)) {
     settingsInputRef.current = settingsInput;
-    settingsRef.current = resolveSettings(inputSettings);
+    settingsRef.current = resolveSettings(effectiveInputSettings);
     settingsRevisionRef.current += 1;
   }
   const resolvedSettings = settingsRef.current;
