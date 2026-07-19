@@ -23,17 +23,17 @@ export function DemoSection({
       id={id}
       className={cn("scroll-mt-24 border-t py-16 md:py-20", className)}
     >
-      <div className="mb-10 max-w-2xl">
-        <p className="mb-2 font-mono text-xs tracking-widest text-muted-foreground uppercase">
-          {index}
-        </p>
-        <div className="flex items-start justify-between gap-4">
+      <div className="mb-10 flex items-start justify-between gap-4">
+        <div className="max-w-2xl">
+          <p className="mb-2 font-mono text-xs tracking-widest text-muted-foreground uppercase">
+            {index}
+          </p>
           <h2 className="text-2xl font-semibold tracking-tight md:text-3xl">
             {title}
           </h2>
-          {action ? <div className="shrink-0">{action}</div> : null}
+          <p className="mt-3 text-muted-foreground">{description}</p>
         </div>
-        <p className="mt-3 text-muted-foreground">{description}</p>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       {children}
     </section>
