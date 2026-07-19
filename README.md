@@ -1,10 +1,8 @@
 # LumaThread
 
-LumaThread is a composable WebGL luminous-filament renderer for React. It was
-extracted from the OpenBacktest landing-page renderer so the visual engine can
-be developed, tested, and versioned independently from the product.
+LumaThread is a composable WebGL luminous-filament renderer for React.
 
-The API is still being stabilized, but the component is distributed as editable
+The component is distributed as editable
 source through its shadcn registry.
 
 ## Demo
@@ -47,10 +45,6 @@ at:
 ```text
 http://localhost:5173/lab
 ```
-
-(The lab's previous address, `/dev/hero-background`, still resolves.) Both
-routes are part of the static GitHub Pages build. The deployment workflow
-publishes them under the repository prefix after changes reach `main`.
 
 ## Install
 
@@ -216,9 +210,8 @@ view box and placement.
 ## Browser requirements
 
 Free paths use the exact HDR renderer and require WebGL2 with floating-point
-render targets and blending. Unsupported devices are reported explicitly; no
-approximate legacy renderer is bundled. The analytic sine renderer remains the
-least expensive path.
+render targets and blending. Unsupported devices are reported explicitly;
+The analytic sine renderer remains the least expensive path.
 
 ## Registry development
 
@@ -232,9 +225,3 @@ bun run registry:build
 
 `registry:build` writes the catalog and item into `site-dist/r`, which is
 deployed alongside the documentation by the GitHub Pages workflow.
-
-## Origin and status
-
-The initial source snapshot comes from the current OpenBacktest working tree.
-OpenBacktest keeps its existing in-app copy for now; this repository is the new
-home for future renderer work. No public license has been selected yet.
