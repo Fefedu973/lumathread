@@ -62,6 +62,27 @@ describe("lab architecture", () => {
     expect(pathSection).toContain("PathInterpolationControls");
   });
 
+  test("mounts only the active control section", () => {
+    const panel = readFileSync(
+      join(labRoot, "controls", "lab-control-panel.tsx"),
+      "utf8",
+    );
+
+    for (const section of [
+      "renderer",
+      "inputs",
+      "path",
+      "motion",
+      "material",
+      "palette",
+      "scene",
+      "glass",
+      "lifecycle",
+    ]) {
+      expect(panel).toContain(`panelSection === "${section}" ?`);
+    }
+  });
+
   test("keeps every lab parameter wired to a control", async () => {
     // Counting JSX tokens breaks as soon as controls are rendered from a
     // helper or a map, so assert the real contract instead: every field of the

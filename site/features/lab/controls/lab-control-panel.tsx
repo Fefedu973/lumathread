@@ -172,15 +172,15 @@ export function LabControlPanel() {
             })}
           </nav>
 
-          <RendererSection />
-          <InputsSection />
-          <PathSection />
-          <MotionSection />
-          <MaterialSection />
-          <PaletteSection />
-          <SceneSection />
-          <GlassSection />
-          <LifecycleSection />
+          {panelSection === "renderer" ? <RendererSection /> : null}
+          {panelSection === "inputs" ? <InputsSection /> : null}
+          {panelSection === "path" ? <PathSection /> : null}
+          {panelSection === "motion" ? <MotionSection /> : null}
+          {panelSection === "material" ? <MaterialSection /> : null}
+          {panelSection === "palette" ? <PaletteSection /> : null}
+          {panelSection === "scene" ? <SceneSection /> : null}
+          {panelSection === "glass" ? <GlassSection /> : null}
+          {panelSection === "lifecycle" ? <LifecycleSection /> : null}
         </div>
       </div>
 
