@@ -4,7 +4,8 @@ LumaThread is a composable WebGL luminous-filament renderer for React. It was
 extracted from the OpenBacktest landing-page renderer so the visual engine can
 be developed, tested, and versioned independently from the product.
 
-The repository is private while the API and packaging are being stabilized.
+The API is still being stabilized, but the component is distributed as editable
+source through its shadcn registry.
 
 ## Highlights
 
@@ -42,6 +43,34 @@ http://localhost:5173/lab
 routes are part of the static GitHub Pages build. The deployment workflow
 publishes them under the repository prefix after changes reach `main`.
 
+## Install
+
+Install the component directly from the public GitHub Pages registry:
+
+```bash
+bunx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json
+```
+
+The command writes the complete modular renderer to
+`@/components/ui/lumathread`. You own the installed source and can import its
+public entry point without adding a LumaThread runtime dependency:
+
+```tsx
+import { LumaThread } from "@/components/ui/lumathread";
+```
+
+To use the GitHub Pages registry as a namespace, register it once and then add
+the item by name:
+
+```bash
+bunx shadcn@latest registry add @lumathread=https://fefedu973.github.io/lumathread/r/{name}.json
+bunx shadcn@latest add @lumathread/lumathread
+```
+
+The catalog is published at
+`https://fefedu973.github.io/lumathread/r/registry.json` and the installable
+item at `https://fefedu973.github.io/lumathread/r/lumathread.json`.
+
 ## Build
 
 ```bash
@@ -55,7 +84,7 @@ kept external and declared as a peer dependency.
 ## Usage
 
 ```tsx
-import { LumaThread } from "lumathread";
+import { LumaThread } from "@/components/ui/lumathread";
 
 export function HeroBackground() {
   return (
@@ -114,12 +143,19 @@ shortest side of their seam.
 
 ### Glass text entrance and DOM tracking
 
-The glass pass has its own entrance. It does not change the canvas fade or any
-regular DOM content: only the refractive text/SVG mask fades from a blurred,
-offset state into its final material.
+The initial scene reveal leaves glass fully visible by default, so the filament
+can fade in behind an already-present refractive mask. Set
+`fadeInAffectsGlassText` to `true` when the glass should fade with the rest of
+the canvas.
+
+The glass pass also has its own optional entrance. It does not change the scene
+fade or any regular DOM content: only the refractive text/SVG mask fades from a
+blurred, offset state into its final material.
 
 ```tsx
 <LumaThread
+  fadeInDuration={900}
+  fadeInAffectsGlassText={false}
   glassText={{
     enabled: true,
     text: "Replay the market.",
@@ -174,6 +210,19 @@ Free paths use the exact HDR renderer and require WebGL2 with floating-point
 render targets and blending. Unsupported devices are reported explicitly; no
 approximate legacy renderer is bundled. The analytic sine renderer remains the
 least expensive path.
+
+## Registry development
+
+The registry definition is kept at the repository root and generated with the
+official shadcn CLI:
+
+```bash
+bun run registry:validate
+bun run registry:build
+```
+
+`registry:build` writes the catalog and item into `site-dist/r`, which is
+deployed alongside the documentation by the GitHub Pages workflow.
 
 ## Origin and status
 

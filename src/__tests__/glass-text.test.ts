@@ -5,6 +5,7 @@ import {
   type GlassTextDomSnapshot,
 } from "../dom/glass-text-target";
 import { resolveSettings } from "../config/settings";
+import { GLASS_COMPOSITE_FRAGMENT_SHADER } from "../rendering/shaders";
 import type { HeroWaveGlassTextConfig } from "../types";
 
 const snapshot: GlassTextDomSnapshot = {
@@ -52,6 +53,23 @@ describe("glass text configuration", () => {
       introOffsetY: -18,
       introEasing: [0.21, 0.47, 0.32, 0.98],
     });
+  });
+
+  test("keeps glass outside the scene fade unless explicitly requested", () => {
+    const independent = resolveSettings({
+      fadeInDuration: 900,
+      fadeInEasing: [0.1, 0.2, 0.8, 0.9],
+      glassText: { enabled: true, text: "Glass" },
+    });
+    const linked = resolveSettings({
+      fadeInAffectsGlassText: true,
+      glassText: { enabled: true, text: "Glass" },
+    });
+
+    expect(independent.fadeInAffectsGlassText).toBe(false);
+    expect(independent.fadeInEasingPoints).toEqual([0.1, 0.2, 0.8, 0.9]);
+    expect(linked.fadeInAffectsGlassText).toBe(true);
+    expect(GLASS_COMPOSITE_FRAGMENT_SHADER).toContain("scene * uSceneOpacity");
   });
 
   test("maps DOM content, typography, and bounds into the text mask", () => {

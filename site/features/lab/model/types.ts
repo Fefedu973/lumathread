@@ -67,42 +67,10 @@ export type SelectedPreset = LabPresetId | "custom";
 export interface SceneFilamentState {
   id: string;
   enabled: boolean;
-  pathMode: HeroWavePathMode;
-  closed: boolean;
-  seedOffset: number;
   timeOffset: number;
   playbackRate: number;
-  offsetX: number;
-  offsetY: number;
-  scaleX: number;
-  scaleY: number;
-  rotation: number;
-  waveY: number;
-  shapeStrength: number;
-  shapeScale: number;
-  shapeFrequency: number;
-  motionMode: HeroWaveMotionMode;
-  curveTravel: number;
-  curveMotion: number;
-  segmentLength: number;
-  tailTaper: number;
-  headTaper: number;
-  propagationEnabled: boolean;
-  profileWidth: number;
-  profileOpacity: number;
-  profileGlow: number;
-  profileReflection: number;
-  materialPreset: HeroWaveMaterialPreset;
-  intensity: number;
-  glow: number;
-  exposure: number;
-  saturation: number;
-  upperGlowSpread: number;
-  lowerGlowSpread: number;
-  glowAsymmetry: number;
-  hue: number;
-  paletteSpeed: number;
-  quality: HeroWaveQualityPreset;
+  /** The complete editable renderer state for this filament. */
+  settings: FilamentLabState;
 }
 
 export interface ProfileKeyState {
@@ -428,10 +396,14 @@ export interface LabState {
   glassIntroCurvePreset: FadeCurvePreset;
   glassIntroCurve: [number, number, number, number];
   sceneMode: boolean;
+  primaryFilamentEnabled: boolean;
+  primaryFilamentTimeOffset: number;
+  primaryFilamentPlaybackRate: number;
   sceneFilaments: SceneFilamentState[];
   fadeInDuration: number;
   fadeCurvePreset: FadeCurvePreset;
   fadeCurve: [number, number, number, number];
+  fadeInAffectsGlassText: boolean;
   paused: boolean;
   controlledTime: boolean;
   initialTime: number;
@@ -440,3 +412,119 @@ export interface LabState {
   respectReducedMotion: boolean;
   pauseWhenOffscreen: boolean;
 }
+
+/**
+ * Lab fields represented by `HeroWaveFilamentConfig`. Everything else belongs
+ * to the shared scene (canvas, dots, glass, inputs and lifecycle).
+ */
+export const FILAMENT_STATE_KEYS = [
+  "quality",
+  "qualityAdvanced",
+  "qualityConfig",
+  "pathMode",
+  "interpolation",
+  "pathTension",
+  "closed",
+  "closedLoopTaper",
+  "pathPoints",
+  "svgPath",
+  "svgViewBox",
+  "organic",
+  "transform",
+  "shape",
+  "motion",
+  "propagationEnabled",
+  "propagationPhaseOffset",
+  "propagationPhaseSpeed",
+  "propagationDeformers",
+  "propagationDomain",
+  "propagationCombine",
+  "propagationStage",
+  "recomputeArcLength",
+  "profilePreset",
+  "profileSource",
+  "profileKeys",
+  "profileInterpolation",
+  "profileWrap",
+  "profileStrength",
+  "profileWidth",
+  "profileOpacity",
+  "profileIntensity",
+  "profileGlow",
+  "profileUpperGlowSpread",
+  "profileLowerGlowSpread",
+  "profileReflection",
+  "profileColorPosition",
+  "materialPreset",
+  "materialAdvanced",
+  "materialAtmosphere",
+  "materialBroad",
+  "materialBody",
+  "materialRidge",
+  "materialCore",
+  "materialVeil",
+  "materialIntensity",
+  "materialGlow",
+  "materialExposure",
+  "materialSaturation",
+  "upperGlowSpread",
+  "lowerGlowSpread",
+  "glowAsymmetry",
+  "paletteStops",
+  "paletteInterpolation",
+  "paletteWrap",
+  "paletteReverse",
+  "paletteSpeed",
+  "hue",
+  "hueDrift",
+  "followMode",
+  "followActivation",
+  "followTransitionDuration",
+  "followTarget",
+  "followPointerMouse",
+  "followPointerPen",
+  "followPointerTouch",
+  "followExternalEnabled",
+  "followExternalSpace",
+  "followExternalX",
+  "followExternalY",
+  "followLeaveBehavior",
+  "followHeadResponse",
+  "followMemorySeconds",
+  "followStationaryBehavior",
+  "followStationaryCollapseDuration",
+  "followLengthCssPx",
+  "followViscosity",
+  "followCascadeLag",
+  "followFadeDuration",
+  "followIdleDelay",
+  "followIdleRadiusX",
+  "followIdleRadiusY",
+  "followIdleSpeedX",
+  "followIdleSpeedY",
+  "followVelocityIntensity",
+  "followVelocityWidth",
+  "followVelocityGlow",
+  "followVelocityHue",
+  "followVelocityReflection",
+  "followVelocityResponse",
+  "followMaxVelocityCssPx",
+  "filamentInteractionEnabled",
+  "filamentInteractionTarget",
+  "filamentInteractionMouse",
+  "filamentInteractionPen",
+  "filamentInteractionTouch",
+  "filamentInteractionRadius",
+  "filamentInteractionStrength",
+  "filamentInteractionPropagationSpeed",
+  "filamentInteractionFrequency",
+  "filamentInteractionDamping",
+  "filamentInteractionSpatialDecay",
+  "filamentInteractionDuration",
+  "filamentInteractionCooldown",
+  "filamentInteractionMaxImpulses",
+  "filamentInteractionDirection",
+] as const satisfies readonly (keyof LabState)[];
+
+export type FilamentStateKey = (typeof FILAMENT_STATE_KEYS)[number];
+export type FilamentLabState = Pick<LabState, FilamentStateKey>;

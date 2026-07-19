@@ -214,6 +214,7 @@ uniform sampler2D uScene;
 uniform sampler2D uEffect;
 uniform sampler2D uBlurEffect;
 uniform vec2 uResolution;
+uniform float uSceneOpacity;
 uniform float uProgress;
 uniform float uBlurMix;
 uniform float uOffsetY;
@@ -230,7 +231,10 @@ void main() {
   vec4 sharpEffect = texture2D(uEffect, effectUv);
   vec4 blurredEffect = texture2D(uBlurEffect, effectUv);
   vec4 effect = mix(sharpEffect, blurredEffect, uBlurMix) * uProgress;
-  gl_FragColor = vec4(scene * (1.0 - effect.a) + effect.rgb, 1.0);
+  gl_FragColor = vec4(
+    scene * uSceneOpacity * (1.0 - effect.a) + effect.rgb,
+    1.0
+  );
 }
 `;
 

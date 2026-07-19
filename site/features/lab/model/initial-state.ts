@@ -3,7 +3,7 @@ import { LAB_MATERIAL_LAYERS, SVG_LOOP } from "./constants";
 import { createLabDeformer, createSceneFilament } from "./factories";
 import type { LabState } from "./types";
 
-export const INITIAL_STATE: LabState = {
+const INITIAL_STATE_BASE: LabState = {
   theme: "dark",
   quality: "high",
   qualityAdvanced: false,
@@ -320,10 +320,14 @@ export const INITIAL_STATE: LabState = {
   glassIntroCurvePreset: "custom",
   glassIntroCurve: [0.21, 0.47, 0.32, 0.98],
   sceneMode: false,
-  sceneFilaments: [createSceneFilament(0)],
+  primaryFilamentEnabled: true,
+  primaryFilamentTimeOffset: 0,
+  primaryFilamentPlaybackRate: 1,
+  sceneFilaments: [],
   fadeInDuration: 900,
   fadeCurvePreset: "ease-out",
   fadeCurve: [0.16, 1, 0.3, 1],
+  fadeInAffectsGlassText: false,
   paused: false,
   controlledTime: false,
   initialTime: 0,
@@ -331,4 +335,9 @@ export const INITIAL_STATE: LabState = {
   playbackRate: 1,
   respectReducedMotion: true,
   pauseWhenOffscreen: true,
+};
+
+export const INITIAL_STATE: LabState = {
+  ...INITIAL_STATE_BASE,
+  sceneFilaments: [createSceneFilament(0, INITIAL_STATE_BASE)],
 };

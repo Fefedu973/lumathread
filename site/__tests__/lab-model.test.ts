@@ -4,6 +4,10 @@ import {
   buildSceneFilaments,
 } from "../features/lab/model/adapters";
 import { readUrlPlaybackState } from "../features/lab/hooks/use-initial-url-state";
+import {
+  selectedFilamentState,
+  updateFilamentScopedState,
+} from "../features/lab/model/filament-state";
 import { INITIAL_STATE } from "../features/lab/model/initial-state";
 import {
   GLASS_PRESETS,
@@ -11,7 +15,16 @@ import {
   selectedGlassPreset,
   stateForPreset,
 } from "../features/lab/model/presets";
+import { randomizeLabState } from "../features/lab/model/randomize";
 import type { LabPresetId } from "../features/lab/model/types";
+
+function seededRandom(seed: number) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
 
 describe("lab model", () => {
   test("clones all mutable initial-state branches", () => {
@@ -22,7 +35,9 @@ describe("lab model", () => {
     clone.profileKeys[0]!.width = 99;
     clone.paletteStops[0]!.color = "#ffffff";
     clone.dotMasks[0]!.radius = 99;
-    clone.sceneFilaments[0]!.offsetX = 99;
+    clone.sceneFilaments[0]!.settings.transform.x = 99;
+    clone.sceneFilaments[0]!.settings.pathPoints[0]!.x = 98;
+    clone.sceneFilaments[0]!.settings.paletteStops[0]!.color = "#eeeeee";
     clone.fadeCurve[0] = 99;
     clone.glassIntroCurve[0] = 99;
 
@@ -34,7 +49,13 @@ describe("lab model", () => {
     expect(INITIAL_STATE.profileKeys[0]!.width).not.toBe(99);
     expect(INITIAL_STATE.paletteStops[0]!.color).not.toBe("#ffffff");
     expect(INITIAL_STATE.dotMasks[0]!.radius).not.toBe(99);
-    expect(INITIAL_STATE.sceneFilaments[0]!.offsetX).not.toBe(99);
+    expect(INITIAL_STATE.sceneFilaments[0]!.settings.transform.x).not.toBe(99);
+    expect(INITIAL_STATE.sceneFilaments[0]!.settings.pathPoints[0]!.x).not.toBe(
+      98,
+    );
+    expect(
+      INITIAL_STATE.sceneFilaments[0]!.settings.paletteStops[0]!.color,
+    ).not.toBe("#eeeeee");
     expect(INITIAL_STATE.fadeCurve[0]).not.toBe(99);
     expect(INITIAL_STATE.glassIntroCurve[0]).not.toBe(99);
   });
@@ -137,6 +158,7 @@ describe("lab model", () => {
     });
     expect(props.material).toMatchObject({ preset: "neon", intensity: 1.08 });
     expect(props.fadeInEasing).toEqual([0.1, 0.2, 0.8, 0.9]);
+    expect(props.fadeInAffectsGlassText).toBe(false);
     expect(props.glassText).toMatchObject({
       dom: {
         target: "#lumathread-lab-glass-target",
@@ -180,10 +202,120 @@ describe("lab model", () => {
     expect(selectedGlassPreset(state)).toBe("clear-crystal");
 
     const filaments = buildSceneFilaments(state);
-    expect(filaments[0]).toEqual({ id: "primary" });
+    expect(filaments[0]).toMatchObject({
+      id: "primary",
+      enabled: true,
+      timeOffset: 0,
+      playbackRate: 1,
+      path: { mode: state.pathMode },
+    });
     expect(filaments).toHaveLength(state.sceneFilaments.length + 1);
     expect(filaments.slice(1).map((filament) => filament.id)).toEqual(
       state.sceneFilaments.map((filament) => filament.id),
+    );
+  });
+
+  test("keeps complete filament configurations independent", () => {
+    const state = cloneInitialState();
+    state.sceneMode = true;
+    const secondary = state.sceneFilaments[0]!;
+    secondary.settings.pathMode = "follow";
+    secondary.settings.followMode = "echo";
+    secondary.settings.followMemorySeconds = 2.4;
+    secondary.settings.motion.speed = 1.7;
+    secondary.settings.materialPreset = "plasma";
+    secondary.settings.paletteStops = [
+      { id: "hot", color: "#ff2200", offset: 0 },
+      { id: "cold", color: "#0066ff", offset: 1 },
+    ];
+    secondary.settings.quality = "low";
+
+    const filaments = buildSceneFilaments(state);
+    expect(filaments[0]?.path?.mode).toBe("organic");
+    expect(filaments[0]?.interaction?.follow?.mode).toBe("hybrid");
+    expect(filaments[1]).toMatchObject({
+      id: secondary.id,
+      path: { mode: "follow" },
+      motion: { speed: 1.7 },
+      interaction: { follow: { mode: "echo", memorySeconds: 2.4 } },
+      material: { preset: "plasma" },
+      quality: "low",
+    });
+    expect(filaments[1]?.palette?.stops).toEqual(
+      secondary.settings.paletteStops,
+    );
+  });
+
+  test("scopes shared controls to the selected filament", () => {
+    const state = cloneInitialState();
+    const secondaryId = state.sceneFilaments[0]!.id;
+    const selected = selectedFilamentState(state, secondaryId);
+    expect(selected.pathMode).toBe(state.sceneFilaments[0]!.settings.pathMode);
+
+    const updated = updateFilamentScopedState(
+      state,
+      secondaryId,
+      (previous) => ({
+        ...previous,
+        pathMode: "follow",
+        followMode: "cascade",
+        dotsEnabled: false,
+      }),
+    );
+
+    expect(updated.pathMode).toBe(state.pathMode);
+    expect(updated.followMode).toBe(state.followMode);
+    expect(updated.dotsEnabled).toBe(false);
+    expect(updated.sceneFilaments[0]!.settings.pathMode).toBe("follow");
+    expect(updated.sceneFilaments[0]!.settings.followMode).toBe("cascade");
+  });
+
+  test("randomizes every visual domain without replacing user inputs", () => {
+    const state = cloneInitialState();
+    state.backgroundImageSrc = "blob:background";
+    state.musicAudioSrc = "blob:audio";
+    const randomized = randomizeLabState(state, seededRandom(73));
+
+    expect(randomized.organic).not.toEqual(state.organic);
+    expect(randomized.transform).not.toEqual(state.transform);
+    expect(randomized.motion).not.toEqual(state.motion);
+    expect(randomized.propagationDeformers).not.toEqual(
+      state.propagationDeformers,
+    );
+    expect(randomized.profileKeys).not.toEqual(state.profileKeys);
+    expect(randomized.materialIntensity).not.toBe(state.materialIntensity);
+    expect(randomized.paletteStops).not.toEqual(state.paletteStops);
+    expect(randomized.followMemorySeconds).not.toBe(state.followMemorySeconds);
+    expect(randomized.filamentInteractionRadius).not.toBe(
+      state.filamentInteractionRadius,
+    );
+    expect(randomized.dotMasks).not.toEqual(state.dotMasks);
+    expect(randomized.terrainFrequency).not.toBe(state.terrainFrequency);
+    expect(randomized.glassRefraction).not.toBe(state.glassRefraction);
+    expect(randomized.fadeInDuration).not.toBe(state.fadeInDuration);
+
+    expect(randomized.theme).toBe(state.theme);
+    expect(randomized.quality).toBe(state.quality);
+    expect(randomized.qualityConfig).toBe(state.qualityConfig);
+    expect(randomized.backgroundImageSrc).toBe("blob:background");
+    expect(randomized.musicAudioSrc).toBe("blob:audio");
+    expect(randomized.sceneFilaments).toBe(state.sceneFilaments);
+  });
+
+  test("can randomize one secondary filament without overwriting the primary", () => {
+    const state = cloneInitialState();
+    const secondaryId = state.sceneFilaments[0]!.id;
+    const selected = selectedFilamentState(state, secondaryId);
+    const randomized = randomizeLabState(selected, seededRandom(91));
+    const updated = updateFilamentScopedState(state, secondaryId, randomized);
+
+    expect(updated.motion).toEqual(state.motion);
+    expect(updated.materialPreset).toBe(state.materialPreset);
+    expect(updated.sceneFilaments[0]!.settings.motion).not.toEqual(
+      state.sceneFilaments[0]!.settings.motion,
+    );
+    expect(updated.sceneFilaments[0]!.settings.paletteStops).not.toEqual(
+      state.sceneFilaments[0]!.settings.paletteStops,
     );
   });
 });

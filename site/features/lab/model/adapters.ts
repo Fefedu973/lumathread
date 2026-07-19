@@ -6,7 +6,7 @@ import type {
 } from "@/hero-wave-background";
 import { INITIAL_STATE } from "./initial-state";
 import { buildProfiles, parseSampledPattern } from "./profiles";
-import type { LabDeformerState, LabState } from "./types";
+import type { FilamentLabState, LabDeformerState, LabState } from "./types";
 
 function buildDeformer(deformer: LabDeformerState): HeroWaveDeformer {
   const common = {
@@ -65,7 +65,12 @@ function buildDeformer(deformer: LabDeformerState): HeroWaveDeformer {
   };
 }
 
-export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
+type FilamentProps = Omit<
+  HeroWaveFilamentConfig,
+  "id" | "enabled" | "timeOffset" | "playbackRate"
+>;
+
+export function buildFilamentProps(state: FilamentLabState): FilamentProps {
   const path = {
     mode: state.pathMode,
     points: state.pathPoints,
@@ -79,17 +84,7 @@ export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
     transform: state.transform,
     organic: state.organic,
   } satisfies NonNullable<HeroWaveBackgroundProps["path"]>;
-  const fadeInEasing: HeroWaveFadeEasing =
-    state.fadeCurvePreset === "custom"
-      ? state.fadeCurve
-      : state.fadeCurvePreset;
-  const glassIntroEasing: HeroWaveFadeEasing =
-    state.glassIntroCurvePreset === "custom"
-      ? state.glassIntroCurve
-      : state.glassIntroCurvePreset;
-
-  const props: HeroWaveBackgroundProps = {
-    theme: state.theme,
+  return {
     path,
     shape: state.shape,
     motion: state.motion,
@@ -202,6 +197,25 @@ export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
         direction: state.filamentInteractionDirection,
       },
     },
+    quality: state.qualityAdvanced
+      ? { preset: state.quality, ...state.qualityConfig }
+      : state.quality,
+  };
+}
+
+export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
+  const fadeInEasing: HeroWaveFadeEasing =
+    state.fadeCurvePreset === "custom"
+      ? state.fadeCurve
+      : state.fadeCurvePreset;
+  const glassIntroEasing: HeroWaveFadeEasing =
+    state.glassIntroCurvePreset === "custom"
+      ? state.glassIntroCurve
+      : state.glassIntroCurvePreset;
+
+  const props: HeroWaveBackgroundProps = {
+    theme: state.theme,
+    ...buildFilamentProps(state),
     dots: {
       enabled: state.dotsEnabled,
       mode: state.dotMode,
@@ -330,11 +344,9 @@ export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
       hue: state.musicHue,
       reflection: state.musicReflection,
     },
-    quality: state.qualityAdvanced
-      ? { preset: state.quality, ...state.qualityConfig }
-      : state.quality,
     fadeInDuration: state.fadeInDuration,
     fadeInEasing,
+    fadeInAffectsGlassText: state.fadeInAffectsGlassText,
     paused: state.paused,
     initialTime: state.initialTime,
     playbackRate: state.playbackRate,
@@ -347,77 +359,19 @@ export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
 
 export function buildSceneFilaments(state: LabState): HeroWaveFilamentConfig[] {
   return [
-    { id: "primary" },
-    ...state.sceneFilaments.map((filament, index) => ({
+    {
+      id: "primary",
+      enabled: state.primaryFilamentEnabled,
+      timeOffset: state.primaryFilamentTimeOffset,
+      playbackRate: state.primaryFilamentPlaybackRate,
+      ...buildFilamentProps(state),
+    },
+    ...state.sceneFilaments.map((filament) => ({
       id: filament.id,
       enabled: filament.enabled,
       timeOffset: filament.timeOffset,
       playbackRate: filament.playbackRate,
-      path: {
-        mode: filament.pathMode,
-        points: state.pathPoints,
-        closed: filament.closed,
-        closedLoopTaper: filament.closed ? state.closedLoopTaper : true,
-        interpolation: state.interpolation,
-        tension: state.pathTension,
-        ...(filament.pathMode === "svg"
-          ? { svgPath: state.svgPath, svgViewBox: state.svgViewBox }
-          : {}),
-        organic: {
-          ...state.organic,
-          seed: state.organic.seed + filament.seedOffset,
-          pointCount: Math.max(8, state.organic.pointCount + index * 2),
-        },
-        transform: {
-          x: filament.offsetX,
-          y: filament.offsetY,
-          scaleX: filament.scaleX,
-          scaleY: filament.scaleY,
-          rotation: filament.rotation,
-        },
-      },
-      shape: {
-        waveY: filament.waveY,
-        strength: filament.shapeStrength,
-        scale: filament.shapeScale,
-        frequency: filament.shapeFrequency,
-      },
-      motion: {
-        mode: filament.motionMode,
-        curveTravel: filament.curveTravel,
-        curveMotion: filament.curveMotion,
-        segmentLength: filament.segmentLength,
-        tailTaper: filament.tailTaper,
-        headTaper: filament.headTaper,
-        speed: state.motion.speed,
-      },
-      propagation: {
-        enabled: filament.propagationEnabled,
-      },
-      profiles: {
-        width: filament.profileWidth,
-        opacity: filament.profileOpacity,
-        intensity: filament.profileOpacity,
-        glow: filament.profileGlow,
-        reflection: filament.profileReflection,
-        colorPosition: index * 0.08,
-      },
-      material: {
-        preset: filament.materialPreset,
-        intensity: filament.intensity,
-        glow: filament.glow,
-        exposure: filament.exposure,
-        saturation: filament.saturation,
-        upperGlowSpread: filament.upperGlowSpread,
-        lowerGlowSpread: filament.lowerGlowSpread,
-        glowAsymmetry: filament.glowAsymmetry,
-      },
-      palette: {
-        speed: filament.paletteSpeed,
-        hue: filament.hue,
-        hueDrift: state.hueDrift,
-      },
-      quality: filament.quality,
+      ...buildFilamentProps(filament.settings),
     })),
   ];
 }

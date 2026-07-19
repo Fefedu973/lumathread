@@ -16,7 +16,8 @@ import type {
   HeroWavePerformanceSample,
   HeroWaveRendererStatus,
 } from "../types";
-import { finite } from "../math";
+import { evaluateFadeEasing } from "../animation/easing";
+import { clamp, finite } from "../math";
 import { buildHeroPaletteTextureData } from "../rendering/color";
 
 import {
@@ -472,6 +473,9 @@ export function useHeroWaveRenderer({
     let reducedMotion = false;
     let readyReported = false;
     let renderedFrameIndex = 0;
+    let sceneFadeProgress = 1;
+    let sceneFadeStartedAt: number | null = null;
+    let sceneFadeKey = "";
     let lastRenderer: HeroWavePerformanceSample["renderer"] = "unavailable";
     const gpuTimerExtension = exactGl?.getExtension(
       "EXT_disjoint_timer_query_webgl2",
@@ -481,6 +485,53 @@ export function useHeroWaveRenderer({
       sample: HeroWavePerformanceSample;
     }
     const pendingGpuTimers: PendingGpuTimer[] = [];
+
+    const glassCanRender = (settings: Settings) =>
+      settings.glassText.enabled &&
+      (settings.glassText.shape === "svg"
+        ? settings.glassText.svgPath.trim().length > 0
+        : settings.glassText.text.trim().length > 0);
+
+    const usesIndependentGlassFade = (settings: Settings) =>
+      glassCanRender(settings) && !settings.fadeInAffectsGlassText;
+
+    const sceneFadeConfigKey = (settings: Settings) =>
+      [
+        settings.fadeInDuration,
+        ...settings.fadeInEasingPoints,
+        settings.fadeInAffectsGlassText ? 1 : 0,
+        glassCanRender(settings) ? 1 : 0,
+      ].join("\u001f");
+
+    const restartSceneFade = (settings: Settings) => {
+      sceneFadeKey = sceneFadeConfigKey(settings);
+      sceneFadeStartedAt = performance.now();
+      sceneFadeProgress =
+        usesIndependentGlassFade(settings) && settings.fadeInDuration > 0
+          ? 0
+          : 1;
+    };
+
+    const updateSceneFade = (settings: Settings) => {
+      const key = sceneFadeConfigKey(settings);
+      if (key !== sceneFadeKey) restartSceneFade(settings);
+      if (!usesIndependentGlassFade(settings) || settings.fadeInDuration <= 0) {
+        sceneFadeProgress = 1;
+        return;
+      }
+      const startedAt = sceneFadeStartedAt ?? performance.now();
+      sceneFadeStartedAt ??= startedAt;
+      const linearProgress =
+        (performance.now() - startedAt) / settings.fadeInDuration;
+      sceneFadeProgress = clamp(
+        evaluateFadeEasing(linearProgress, settings.fadeInEasingPoints),
+        0,
+        1,
+      );
+    };
+
+    const sceneFadeNeedsAnimation = (settings: Settings) =>
+      usesIndependentGlassFade(settings) && sceneFadeProgress < 0.9999;
 
     const emitPerformanceSample = (sample: HeroWavePerformanceSample) => {
       callbacksRef.current.onPerformance?.(sample);
@@ -753,6 +804,7 @@ export function useHeroWaveRenderer({
       musicModifierScratch,
       pointerState,
       getClockTime: () => clockTime,
+      getSceneFadeProgress: () => sceneFadeProgress,
       isRunning: () => running,
       requestFrame,
       activateProgram,
@@ -857,6 +909,7 @@ export function useHeroWaveRenderer({
         resizeCanvas();
       }
       const root = settingsRef.current;
+      updateSceneFade(root);
       const scene = getActiveScene(root);
       pruneSceneCaches(scene);
       const directSine =
@@ -1001,7 +1054,9 @@ export function useHeroWaveRenderer({
         !root.paused &&
         !manualPausedRef.current &&
         (followNeedsAnimation(scene) || disturbanceNeedsAnimation(scene));
-      if (clockRuns || interactionRuns) requestFrame();
+      if (clockRuns || interactionRuns || sceneFadeNeedsAnimation(root)) {
+        requestFrame();
+      }
     }
 
     const onVisibilityChange = () => {
@@ -1034,8 +1089,10 @@ export function useHeroWaveRenderer({
 
     draw(1 / 60);
     const reveal = () => {
+      if (!readyReported) restartSceneFade(settingsRef.current);
       canvas.dataset.ready = "true";
       canvas.style.opacity = "1";
+      requestFrame();
       if (!readyReported) {
         readyReported = true;
         callbacksRef.current.onReady?.();

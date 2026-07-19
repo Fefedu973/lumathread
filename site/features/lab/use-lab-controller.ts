@@ -6,14 +6,15 @@ import {
   MIN_HERO_TRAJECTORY_POINTS,
   type HeroTrajectoryPoint,
   type HeroWaveBackgroundHandle,
-  type HeroWaveMaterialPreset,
 } from "@/hero-wave-background";
 import { useInitialUrlState } from "./hooks/use-initial-url-state";
+import { useFilamentEditor } from "./hooks/use-filament-editor";
 import { useLabDerivedState } from "./hooks/use-lab-derived-state";
 import { useObjectUrlCleanup } from "./hooks/use-object-url-cleanup";
 import { useRendererMetrics } from "./hooks/use-renderer-metrics";
 import { useStageViewport } from "./hooks/use-stage-viewport";
-import { createLabDeformer, createSceneFilament } from "./model/factories";
+import { createLabDeformer } from "./model/factories";
+import { PRIMARY_FILAMENT_ID } from "./model/filament-state";
 import { createRandomPathConfiguration } from "./model/path-editor";
 import {
   GLASS_PRESETS,
@@ -23,6 +24,7 @@ import {
   type GlassPresetId,
 } from "./model/presets";
 import { hslToHex } from "./model/profiles";
+import { randomizeLabState } from "./model/randomize";
 import type {
   DeformerKind,
   HarmonicState,
@@ -31,13 +33,13 @@ import type {
   LabPresetId,
   LabState,
   ProfileKeyState,
-  ProfilePreset,
-  SceneFilamentState,
   SelectedPreset,
 } from "./model/types";
 
 export function useLabController() {
-  const [state, setState] = useState<LabState>(() => cloneInitialState());
+  const [sceneState, setSceneState] = useState<LabState>(() =>
+    cloneInitialState(),
+  );
 
   const [preset, setPreset] = useState<SelectedPreset>("reference");
 
@@ -65,6 +67,28 @@ export function useLabController() {
 
   const [renderEpoch, setRenderEpoch] = useState(0);
 
+  const filamentEditor = useFilamentEditor(
+    sceneState,
+    setSceneState,
+    setSelectedPoint,
+    setShowPathEditor,
+  );
+  const {
+    state,
+    setState,
+    selectedFilamentId,
+    setSelectedFilamentId,
+    selectedFilamentMeta,
+    editingPrimaryFilament,
+    selectFilament,
+    setSceneMode,
+    addSceneFilament,
+    duplicateSelectedFilament,
+    updateSelectedFilamentMeta,
+    renameSelectedFilament,
+    removeSelectedFilament,
+  } = filamentEditor;
+
   const waveRef = useRef<HeroWaveBackgroundHandle>(null);
   const { stageRef, viewportSize } = useStageViewport();
   const {
@@ -77,9 +101,9 @@ export function useLabController() {
     statusLabel,
   } = useRendererMetrics();
 
-  useObjectUrlCleanup(state.backgroundImageSrc);
-  useObjectUrlCleanup(state.musicAudioSrc);
-  useInitialUrlState(setState);
+  useObjectUrlCleanup(sceneState.backgroundImageSrc);
+  useObjectUrlCleanup(sceneState.musicAudioSrc);
+  useInitialUrlState(setSceneState);
 
   const {
     backgroundProps,
@@ -89,7 +113,7 @@ export function useLabController() {
     verticalScale,
     automaticTerrainColumns,
     editorPath,
-  } = useLabDerivedState(state, viewportSize);
+  } = useLabDerivedState(sceneState, viewportSize, state);
 
   const markCustom = () => setPreset("custom");
 
@@ -106,7 +130,8 @@ export function useLabController() {
   const applyPreset = (id: LabPresetId) => {
     setAutoRandomPath(false);
     setAutoCycle(0);
-    setState({ ...stateForPreset(id), textMode: false });
+    setSceneState({ ...stateForPreset(id), textMode: false });
+    setSelectedFilamentId(PRIMARY_FILAMENT_ID);
     setPreset(id);
     setShowPathEditor(id === "sampled" || id === "scene");
     setSelectedPoint(0);
@@ -115,70 +140,22 @@ export function useLabController() {
   const randomize = () => {
     setAutoRandomPath(false);
     setAutoCycle(0);
-    const kinds: DeformerKind[] = ["harmonics", "sampled", "noise", "pulse"];
-    const materials: HeroWaveMaterialPreset[] = [
-      "soft-aurora",
-      "mist",
-      "neon",
-      "plasma",
-    ];
-    const profiles: ProfilePreset[] = [
-      "flat",
-      "comet",
-      "center-glow",
-      "segmented",
-    ];
-    const paletteId = Date.now().toString(36);
-    const hue = Math.random() * 360;
-    const randomKind = kinds[Math.floor(Math.random() * kinds.length)]!;
-    const randomPath = createRandomPathConfiguration();
-    setState((previous) => ({
-      ...previous,
-      textMode: false,
-      pathMode: Math.random() > 0.72 ? "custom" : "organic",
-      ...randomPath,
-      motion: {
-        ...previous.motion,
-        mode: (["travel", "propagate", "anchored"] as const)[
-          Math.floor(Math.random() * 3)
-        ]!,
-        curveTravel: 0.025 + Math.random() * 0.16,
-        curveMotion: Math.random() * 1.2,
-        segmentLength: 0.45 + Math.random() * 0.75,
-        speed: 0.35 + Math.random() * 1.25,
-      },
-      propagationEnabled: Math.random() > 0.2,
-      propagationPhaseSpeed: 0.08 + Math.random() * 1.1,
-      propagationDeformers: [
-        createLabDeformer(randomKind, 0, {
-          amplitude: 0.006 + Math.random() * 0.06,
-          sampledFrequency: 0.8 + Math.random() * 8,
-          noiseFrequency: 0.8 + Math.random() * 8,
-          pulseCount: 1 + Math.floor(Math.random() * 5),
-        }),
-      ],
-      profilePreset: profiles[Math.floor(Math.random() * profiles.length)]!,
-      profileStrength: 0.65 + Math.random() * 0.9,
-      materialPreset: materials[Math.floor(Math.random() * materials.length)]!,
-      materialIntensity: 0.65 + Math.random() * 0.9,
-      materialGlow: 0.55 + Math.random() * 1.3,
-      paletteStops: [0, 1, 2, 3].map((index) => ({
-        id: `random-${paletteId}-${index}`,
-        color: hslToHex(hue + index * (35 + Math.random() * 35), 0.9, 0.58),
-        offset: index / 3,
-        easing: index < 3 ? "smooth" : "linear",
-      })),
-      hueDrift: Math.random() * 10,
-      sceneMode: Math.random() > 0.72,
-      paused: false,
-      controlledTime: false,
-    }));
+    const randomized = randomizeLabState(state);
+    setState(randomized);
+    updateSelectedFilamentMeta({
+      timeOffset: Math.random() * 4,
+      playbackRate: 0.35 + Math.random() * 1.45,
+    });
+    setShowPathEditor(randomized.pathMode === "custom" && !randomized.textMode);
+    setShowMaskGuides(false);
+    setSelectedPoint(0);
+    setRenderEpoch((value) => value + 1);
     setPreset("custom");
   };
 
   const regenerateAutoPath = () => {
     const randomPath = createRandomPathConfiguration();
-    setState((previous) => ({
+    setSceneState((previous) => ({
       ...previous,
       textMode: false,
       ...randomPath,
@@ -197,6 +174,7 @@ export function useLabController() {
   };
 
   const startAutoPath = () => {
+    setSelectedFilamentId(PRIMARY_FILAMENT_ID);
     regenerateAutoPath();
     setAutoRandomPath(true);
     setAutoCycle(1);
@@ -208,7 +186,7 @@ export function useLabController() {
   const startTextMode = () => {
     setAutoRandomPath(false);
     setAutoCycle(0);
-    setState((previous) => ({
+    setSceneState((previous) => ({
       ...previous,
       textMode: true,
       sceneMode: false,
@@ -216,6 +194,7 @@ export function useLabController() {
       paused: false,
       controlledTime: false,
     }));
+    setSelectedFilamentId(PRIMARY_FILAMENT_ID);
     setPreset("custom");
     setShowPathEditor(false);
     setShowMaskGuides(false);
@@ -248,7 +227,8 @@ export function useLabController() {
         mode: "travel",
         ...options.motion,
       },
-      sceneMode: false,
+      sceneMode:
+        selectedFilamentId === PRIMARY_FILAMENT_ID ? false : previous.sceneMode,
       paused: false,
       controlledTime: false,
     }));
@@ -410,41 +390,6 @@ export function useLabController() {
     }));
   };
 
-  const addSceneFilament = () => {
-    setState((previous) => {
-      if (previous.sceneFilaments.length >= 5) return previous;
-      return {
-        ...previous,
-        sceneMode: true,
-        sceneFilaments: [
-          ...previous.sceneFilaments,
-          createSceneFilament(previous.sceneFilaments.length),
-        ],
-      };
-    });
-  };
-
-  const updateSceneFilament = (
-    index: number,
-    changes: Partial<SceneFilamentState>,
-  ) => {
-    setState((previous) => ({
-      ...previous,
-      sceneFilaments: previous.sceneFilaments.map((filament, filamentIndex) =>
-        filamentIndex === index ? { ...filament, ...changes } : filament,
-      ),
-    }));
-  };
-
-  const removeSceneFilament = (index: number) => {
-    setState((previous) => ({
-      ...previous,
-      sceneFilaments: previous.sceneFilaments.filter(
-        (_filament, filamentIndex) => filamentIndex !== index,
-      ),
-    }));
-  };
-
   const updateFadeCurve = (index: number, value: number) => {
     setState((previous) => {
       const fadeCurve: [number, number, number, number] = [
@@ -585,11 +530,17 @@ export function useLabController() {
     },
   };
 
-  const lightTheme = state.theme === "light";
+  const lightTheme = sceneState.theme === "light";
 
   return {
     state,
     setState,
+    sceneState,
+    selectedFilamentId,
+    selectedFilamentMeta,
+    editingPrimaryFilament,
+    selectFilament,
+    setSceneMode,
     preset,
     panelOpen,
     setPanelOpen,
@@ -643,8 +594,10 @@ export function useLabController() {
     addMask,
     updateMaskFromPointer,
     addSceneFilament,
-    updateSceneFilament,
-    removeSceneFilament,
+    duplicateSelectedFilament,
+    updateSelectedFilamentMeta,
+    renameSelectedFilament,
+    removeSelectedFilament,
     updateFadeCurve,
     updateGlassIntroCurve,
     addProfileKey,

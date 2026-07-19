@@ -9,10 +9,30 @@ import {
 import { cn } from "@site/lib/utils";
 
 const MANAGERS = [
-  { id: "bun", label: "bun", command: "bun add lumathread" },
-  { id: "npm", label: "npm", command: "npm install lumathread" },
-  { id: "pnpm", label: "pnpm", command: "pnpm add lumathread" },
-  { id: "yarn", label: "yarn", command: "yarn add lumathread" },
+  {
+    id: "bun",
+    label: "bun",
+    command:
+      "bunx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json",
+  },
+  {
+    id: "npm",
+    label: "npm",
+    command:
+      "npx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json",
+  },
+  {
+    id: "pnpm",
+    label: "pnpm",
+    command:
+      "pnpm dlx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json",
+  },
+  {
+    id: "yarn",
+    label: "yarn",
+    command:
+      "yarn dlx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json",
+  },
 ] as const;
 
 export function InstallTabs({ className }: { className?: string }) {

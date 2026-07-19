@@ -91,7 +91,7 @@ describe("lab architecture", () => {
     // Floors rather than exact counts: folding controls into helpers is
     // allowed, deleting whole families of them is not.
     const minimums = {
-      "<NumberSlider": 150,
+      "<NumberSlider": 140,
       "<SelectField": 15,
       "<SwitchField": 15,
       "<ControlGroup": 40,
@@ -113,5 +113,24 @@ describe("lab architecture", () => {
         "@site/components/ui/select",
       );
     }
+  });
+
+  test("edits full filament settings through one selected control surface", () => {
+    const controller = readFileSync(
+      join(labRoot, "hooks", "use-filament-editor.ts"),
+      "utf8",
+    );
+    const panel = readFileSync(
+      join(labRoot, "controls", "lab-control-panel.tsx"),
+      "utf8",
+    );
+    const model = readFileSync(
+      join(labRoot, "model", "filament-state.ts"),
+      "utf8",
+    );
+
+    expect(panel).toContain("FilamentSelector");
+    expect(controller).toContain("updateFilamentScopedState");
+    expect(model).toContain("FILAMENT_STATE_KEYS");
   });
 });

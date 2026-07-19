@@ -6,27 +6,33 @@ import { buildTextFilaments } from "../model/text-filaments";
 import type { LabState } from "../model/types";
 
 export function useLabDerivedState(
-  state: LabState,
+  sceneState: LabState,
   viewportSize: { width: number; height: number },
+  editorState: LabState = sceneState,
 ) {
-  const backgroundProps = useMemo(() => buildBackgroundProps(state), [state]);
+  const backgroundProps = useMemo(
+    () => buildBackgroundProps(sceneState),
+    [sceneState],
+  );
 
   const sceneFilaments = useMemo(
     () =>
-      state.textMode ? buildTextFilaments(state) : buildSceneFilaments(state),
-    [state],
+      sceneState.textMode
+        ? buildTextFilaments(sceneState)
+        : buildSceneFilaments(sceneState),
+    [sceneState],
   );
 
-  const sceneActive = state.sceneMode || state.textMode;
-  const activeFilamentCount = state.textMode
+  const sceneActive = sceneState.sceneMode || sceneState.textMode;
+  const activeFilamentCount = sceneState.textMode
     ? sceneFilaments.filter((filament) => filament.enabled !== false).length
-    : state.sceneMode
-      ? 1 + state.sceneFilaments.filter((filament) => filament.enabled).length
+    : sceneState.sceneMode
+      ? sceneFilaments.filter((filament) => filament.enabled !== false).length
       : 1;
 
   const verticalScale = getHeroTrajectoryVerticalScale(
-    state.shape.scale,
-    state.shape.strength,
+    editorState.shape.scale,
+    editorState.shape.strength,
   );
 
   const automaticTerrainColumns = Math.round(
@@ -34,7 +40,7 @@ export function useLabDerivedState(
       320,
       Math.max(
         8,
-        state.terrainRows *
+        sceneState.terrainRows *
           (viewportSize.width / Math.max(viewportSize.height, 1)),
       ),
     ),
@@ -43,21 +49,21 @@ export function useLabDerivedState(
   const editorPath = useMemo(
     () =>
       buildEditorPath({
-        points: state.pathPoints,
-        interpolation: state.interpolation,
-        tension: state.pathTension,
-        closed: state.closed,
-        waveY: state.shape.waveY,
+        points: editorState.pathPoints,
+        interpolation: editorState.interpolation,
+        tension: editorState.pathTension,
+        closed: editorState.closed,
+        waveY: editorState.shape.waveY,
         verticalScale,
         width: viewportSize.width,
         height: viewportSize.height,
       }),
     [
-      state.pathPoints,
-      state.interpolation,
-      state.pathTension,
-      state.closed,
-      state.shape.waveY,
+      editorState.pathPoints,
+      editorState.interpolation,
+      editorState.pathTension,
+      editorState.closed,
+      editorState.shape.waveY,
       verticalScale,
       viewportSize,
     ],

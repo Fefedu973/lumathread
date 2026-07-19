@@ -39,6 +39,7 @@ export interface DrawControllerOptions {
   musicModifierScratch: FollowRuntimeModifiers;
   pointerState: FollowPointerState;
   getClockTime: () => number;
+  getSceneFadeProgress: () => number;
   isRunning: () => boolean;
   requestFrame: () => void;
   activateProgram: (program: WebGLProgram | null) => void;

@@ -1,4 +1,5 @@
 import { createLabDeformer } from "./factories";
+import { cloneSceneFilament } from "./filament-state";
 import { INITIAL_STATE } from "./initial-state";
 import type { LabPresetId, LabState } from "./types";
 
@@ -170,9 +171,7 @@ export function cloneInitialState(): LabState {
     profileKeys: INITIAL_STATE.profileKeys.map((key) => ({ ...key })),
     paletteStops: INITIAL_STATE.paletteStops.map((stop) => ({ ...stop })),
     dotMasks: INITIAL_STATE.dotMasks.map((mask) => ({ ...mask })),
-    sceneFilaments: INITIAL_STATE.sceneFilaments.map((filament) => ({
-      ...filament,
-    })),
+    sceneFilaments: INITIAL_STATE.sceneFilaments.map(cloneSceneFilament),
     fadeCurve: [...INITIAL_STATE.fadeCurve],
     glassIntroCurve: [...INITIAL_STATE.glassIntroCurve],
   };

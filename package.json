@@ -4,6 +4,9 @@
   "private": true,
   "description": "A composable WebGL luminous filament renderer for React.",
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "files": [
     "dist"
   ],
@@ -19,12 +22,17 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && tsc -p tsconfig.build.json",
-    "build:site": "vite build --config vite.site.config.ts && node scripts/create-static-routes.mjs",
+    "build:site": "vite build --config vite.site.config.ts && node scripts/create-static-routes.mjs && bun run registry:build",
     "check": "tsc --noEmit && biome check .",
     "format": "biome format --write .",
     "test": "bun test",
-    "ci": "bun run check && bun run test && bun run build && bun run build:site",
-    "preview": "vite preview"
+    "ci": "bun run check && bun run test && bun run registry:validate && bun run build && bun run build:site && bun run video:check",
+    "preview": "vite preview",
+    "registry:build": "shadcn build registry.json --output site-dist/r",
+    "registry:validate": "shadcn registry validate registry.json",
+    "video:dev": "bun run --cwd apps/video dev",
+    "video:check": "bun run --cwd apps/video check",
+    "video:render": "bun run --cwd apps/video render"
   },
   "peerDependencies": {
     "react": ">=18.3"

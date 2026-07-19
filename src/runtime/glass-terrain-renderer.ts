@@ -30,6 +30,7 @@ export function createGlassTerrainRenderer(
     maskTexture,
     pointerState,
     getClockTime,
+    getSceneFadeProgress,
     isRunning,
     requestFrame,
     activateProgram,
@@ -670,6 +671,12 @@ export function createGlassTerrainRenderer(
       "uResolution",
       resourceState.canvasWidth,
       resourceState.canvasHeight,
+    );
+    uniform1f(
+      gl,
+      resources.compositeProgram,
+      "uSceneOpacity",
+      settings.fadeInAffectsGlassText ? 1 : getSceneFadeProgress(),
     );
     uniform1f(gl, resources.compositeProgram, "uProgress", introProgress);
     uniform1f(

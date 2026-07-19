@@ -106,6 +106,13 @@ const HdrHeroWaveBackground = forwardRef<
   const resolvedSettings = settingsRef.current;
   const fadeInDuration = resolvedSettings.fadeInDuration;
   const fadeInEasing = resolvedSettings.fadeInEasing;
+  const glassCanRender =
+    resolvedSettings.glassText.enabled &&
+    (resolvedSettings.glassText.shape === "svg"
+      ? resolvedSettings.glassText.svgPath.trim().length > 0
+      : resolvedSettings.glassText.text.trim().length > 0);
+  const usesIndependentGlassFade =
+    glassCanRender && !resolvedSettings.fadeInAffectsGlassText;
   const musicVisualizerConnectionKey = JSON.stringify({
     enabled: resolvedSettings.musicVisualizer.enabled,
     source: resolvedSettings.musicVisualizer.source,
@@ -177,12 +184,19 @@ const HdrHeroWaveBackground = forwardRef<
     setContextEpoch,
   });
 
-  const previousFadeDuration = useRef(fadeInDuration);
+  const fadeConfigurationKey = `${fadeInDuration}\u001f${fadeInEasing}\u001f${usesIndependentGlassFade ? 1 : 0}`;
+  const previousFadeConfiguration = useRef(fadeConfigurationKey);
   useEffect(() => {
-    if (previousFadeDuration.current === fadeInDuration) return;
-    previousFadeDuration.current = fadeInDuration;
+    if (previousFadeConfiguration.current === fadeConfigurationKey) return;
+    previousFadeConfiguration.current = fadeConfigurationKey;
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (usesIndependentGlassFade) {
+      canvas.dataset.ready = "true";
+      canvas.style.opacity = "1";
+      invalidateRef.current();
+      return;
+    }
     delete canvas.dataset.ready;
     canvas.style.opacity = "0";
     let revealRaf = 0;
@@ -200,7 +214,7 @@ const HdrHeroWaveBackground = forwardRef<
       cancelAnimationFrame(revealRaf);
       window.clearTimeout(revealTimer);
     };
-  }, [fadeInDuration]);
+  }, [fadeConfigurationKey, usesIndependentGlassFade]);
 
   return (
     <canvas
@@ -219,7 +233,9 @@ const HdrHeroWaveBackground = forwardRef<
         backgroundColor:
           resolvedSettings.theme === "light" ? "#ffffff" : "#020304",
         ...style,
-        transitionDuration: `${fadeInDuration}ms`,
+        transitionDuration: usesIndependentGlassFade
+          ? "0ms"
+          : `${fadeInDuration}ms`,
         transitionTimingFunction: fadeInEasing,
       }}
       className={className}

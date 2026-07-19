@@ -38,6 +38,7 @@ import { PathSection } from "../sections/path-section";
 import { RendererSection } from "../sections/renderer-section";
 import { SceneSection } from "../sections/scene-section";
 import { SwitchField } from "./common-controls";
+import { FilamentSelector } from "./filament-scene-controls";
 
 const SECTION_ICONS: Record<LabPanelSection, LucideIcon> = {
   renderer: Gauge,
@@ -122,6 +123,8 @@ export function LabControlPanel() {
             </SelectItem>
           </SelectContent>
         </Select>
+
+        <FilamentSelector />
 
         <div className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/20 px-2.5 py-1.5 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1.5">

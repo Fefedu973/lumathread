@@ -124,7 +124,7 @@ export const API_REFERENCE: PropGroup[] = [
         name: "fadeInDuration",
         type: "number",
         defaultValue: "900",
-        description: "Initial canvas reveal duration in milliseconds.",
+        description: "Initial scene reveal duration in milliseconds.",
       },
       {
         name: "fadeInEasing",
@@ -132,6 +132,13 @@ export const API_REFERENCE: PropGroup[] = [
         defaultValue: '"ease-out"',
         description:
           "CSS easing preset or cubic-bezier control points for the initial reveal.",
+      },
+      {
+        name: "fadeInAffectsGlassText",
+        type: "boolean",
+        defaultValue: "false",
+        description:
+          "Includes the refractive glass overlay in the initial scene fade. Keep disabled to reveal the filament behind already-visible glass.",
       },
       {
         name: "paused",

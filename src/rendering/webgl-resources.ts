@@ -136,6 +136,7 @@ export const GLASS_COMPOSITE_UNIFORMS = [
   "uEffect",
   "uBlurEffect",
   "uResolution",
+  "uSceneOpacity",
   "uProgress",
   "uBlurMix",
   "uOffsetY",

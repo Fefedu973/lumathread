@@ -1,0 +1,27 @@
+{
+  "name": "@lumathread/video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LumaThread product launch video",
+  "type": "module",
+  "scripts": {
+    "dev": "remotion studio",
+    "check": "tsc --noEmit",
+    "bundle": "remotion bundle",
+    "render": "remotion render LumaThreadLaunch out/lumathread-launch.mp4 --codec=h264 --crf=18 --concurrency=1",
+    "cover": "remotion still LumaThreadLaunch out/lumathread-cover.png --frame=84"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.9",
+    "@remotion/cli": "4.0.490",
+    "lucide-react": "^1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "remotion": "4.0.490"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^5.9.3"
+  }
+}

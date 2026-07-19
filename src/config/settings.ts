@@ -68,6 +68,7 @@ export interface StructuredWaveConfig {
   quality?: HeroWaveQualityPreset | HeroWaveQualityConfig | undefined;
   fadeInDuration?: number | undefined;
   fadeInEasing?: HeroWaveFadeEasing | undefined;
+  fadeInAffectsGlassText?: boolean | undefined;
   paused?: boolean | undefined;
   time?: number | undefined;
   initialTime?: number | undefined;
@@ -1121,6 +1122,14 @@ export function resolveOneSettings(
       input.fadeInEasing,
       inherited?.fadeInEasing ?? INTERNAL_DEFAULTS.fadeInEasing,
     ),
+    fadeInEasingPoints: resolveFadeEasingPoints(
+      input.fadeInEasing,
+      inherited?.fadeInEasingPoints ?? INTERNAL_DEFAULTS.fadeInEasingPoints,
+    ),
+    fadeInAffectsGlassText:
+      input.fadeInAffectsGlassText ??
+      inherited?.fadeInAffectsGlassText ??
+      INTERNAL_DEFAULTS.fadeInAffectsGlassText,
     paused: input.paused ?? inherited?.paused ?? INTERNAL_DEFAULTS.paused,
     controlledTime: Number.isFinite(input.time)
       ? input.time

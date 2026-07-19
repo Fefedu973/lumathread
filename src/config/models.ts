@@ -261,6 +261,8 @@ export interface Settings {
   musicVisualizer: ResolvedMusicVisualizer;
   fadeInDuration: number;
   fadeInEasing: string;
+  fadeInEasingPoints: readonly [number, number, number, number];
+  fadeInAffectsGlassText: boolean;
   paused: boolean;
   controlledTime: number | undefined;
   initialTime: number;

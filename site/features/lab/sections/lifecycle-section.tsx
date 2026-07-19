@@ -68,6 +68,17 @@ export function LifecycleSection() {
             setState((previous) => ({ ...previous, fadeInDuration: value }))
           }
         />
+        <SwitchField
+          label="Fade glass with filament"
+          hint="When disabled, the scene reveals while the glass overlay stays fully visible."
+          checked={state.fadeInAffectsGlassText}
+          onChange={(fadeInAffectsGlassText) =>
+            setState((previous) => ({
+              ...previous,
+              fadeInAffectsGlassText,
+            }))
+          }
+        />
         <FieldRow label="Easing">
           <SelectField
             ariaLabel="Reveal easing"

@@ -190,20 +190,19 @@ export function buildEditorPath({
     .join(" ");
 }
 
-export function createRandomPathConfiguration(): Pick<
-  LabState,
-  "organic" | "pathPoints" | "shape"
-> {
-  const seed = Math.floor(Math.random() * 2_000_000_000) + 1;
+export function createRandomPathConfiguration(
+  random: () => number = Math.random,
+): Pick<LabState, "organic" | "pathPoints" | "shape"> {
+  const seed = Math.floor(random() * 2_000_000_000) + 1;
   const organicBase = {
     seed,
-    pointCount: 12 + Math.floor(Math.random() * 17),
-    turns: 0.8 + Math.random() * 3,
+    pointCount: 12 + Math.floor(random() * 17),
+    turns: 0.8 + random() * 3,
     amplitude: 1,
-    roughness: 0.15 + Math.random() * 0.65,
-    horizontalJitter: 0.04 + Math.random() * 0.2,
-    speedVariation: 0.35 + Math.random() * 1.15,
-    symmetry: Math.random() * 0.65,
+    roughness: 0.15 + random() * 0.65,
+    horizontalJitter: 0.04 + random() * 0.2,
+    speedVariation: 0.35 + random() * 1.15,
+    symmetry: random() * 0.65,
   };
   const sourcePoints = createHeroOrganicTrajectory(
     seed,
@@ -213,9 +212,9 @@ export function createRandomPathConfiguration(): Pick<
   const minimumY = Math.min(...sourcePoints.map((point) => point.y));
   const maximumY = Math.max(...sourcePoints.map((point) => point.y));
   const sourceSpan = Math.max(maximumY - minimumY, 0.001);
-  const topEdge = 0.06 + Math.random() * 0.08;
-  const bottomEdge = 0.86 + Math.random() * 0.08;
-  const shapeScale = 0.85 + Math.random() * 0.45;
+  const topEdge = 0.06 + random() * 0.08;
+  const bottomEdge = 0.86 + random() * 0.08;
+  const shapeScale = 0.85 + random() * 0.45;
   const verticalScale = getHeroTrajectoryVerticalScale(shapeScale, 1);
   const amplitude = Math.min(
     4,
@@ -229,7 +228,7 @@ export function createRandomPathConfiguration(): Pick<
       waveY: topEdge + maximumY * amplitude * verticalScale,
       strength: 1,
       scale: shapeScale,
-      frequency: 0.7 + Math.random() * 2.5,
+      frequency: 0.7 + random() * 2.5,
     },
   };
 }

@@ -3,7 +3,7 @@ import type {
   HeroWaveScalarProfile,
 } from "@/hero-wave-background";
 import { INITIAL_STATE } from "./initial-state";
-import type { LabState, ProfileKeyState } from "./types";
+import type { FilamentLabState, ProfileKeyState } from "./types";
 
 export function hslToHex(hue: number, saturation: number, lightness: number) {
   const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
@@ -55,7 +55,9 @@ function makeCurveProfile(
   };
 }
 
-function buildPresetProfiles(state: LabState): HeroWaveLongitudinalProfiles {
+function buildPresetProfiles(
+  state: FilamentLabState,
+): HeroWaveLongitudinalProfiles {
   const strength = state.profileStrength;
   if (state.profilePreset === "comet") {
     return {
@@ -195,7 +197,9 @@ function transformProfile(
   return { type: "sampled", interpolation: "cubic", values };
 }
 
-export function buildProfiles(state: LabState): HeroWaveLongitudinalProfiles {
+export function buildProfiles(
+  state: FilamentLabState,
+): HeroWaveLongitudinalProfiles {
   const sortedKeys = [...(state.profileKeys ?? INITIAL_STATE.profileKeys)].sort(
     (left, right) => left.position - right.position,
   );

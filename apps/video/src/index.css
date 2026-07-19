@@ -1,0 +1,25 @@
+@import "@fontsource-variable/geist";
+
+:root {
+  font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  background: #05070a;
+  overflow: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  animation: none !important;
+  transition: none !important;
+}
+
+canvas {
+  display: block;
+}

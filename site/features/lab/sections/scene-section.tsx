@@ -14,7 +14,8 @@ import { DotMaskControls } from "@site/features/lab/controls/dot-mask-controls";
 import { useLabControllerContext } from "@site/features/lab/lab-controller-context";
 
 export function SceneSection() {
-  const { state, setState, panelSection } = useLabControllerContext();
+  const { state, setState, setSceneMode, panelSection } =
+    useLabControllerContext();
   const interactionOff = !state.dotsEnabled || !state.dotInteractionEnabled;
 
   const set = <Key extends keyof typeof state>(
@@ -36,13 +37,7 @@ export function SceneSection() {
           label="Multi-filament scene"
           hint="Render several filaments into one shared HDR pass."
           checked={state.sceneMode}
-          onChange={(sceneMode) =>
-            setState((previous) => ({
-              ...previous,
-              sceneMode,
-              textMode: sceneMode ? false : previous.textMode,
-            }))
-          }
+          onChange={setSceneMode}
         />
         <FilamentSceneControls />
       </ControlGroup>

@@ -41,17 +41,25 @@ export function PathSection() {
     markCustom,
     startAutoPath,
     startTextMode,
+    editingPrimaryFilament,
   } = useLabControllerContext();
 
-  const source: PathSourceValue = autoRandomPath
-    ? "auto"
-    : state.textMode
-      ? "text"
-      : state.pathMode;
+  const source: PathSourceValue =
+    editingPrimaryFilament && autoRandomPath
+      ? "auto"
+      : editingPrimaryFilament && state.textMode
+        ? "text"
+        : state.pathMode;
 
   const selectSource = (mode: PathSourceValue) => {
-    if (mode === "auto") return startAutoPath();
-    if (mode === "text") return startTextMode();
+    if (mode === "auto") {
+      if (editingPrimaryFilament) startAutoPath();
+      return;
+    }
+    if (mode === "text") {
+      if (editingPrimaryFilament) startTextMode();
+      return;
+    }
     setAutoRandomPath(false);
     setAutoCycle(0);
     setState((previous) => ({
@@ -86,22 +94,26 @@ export function PathSection() {
             { value: "custom", label: "Custom" },
             { value: "svg", label: "SVG" },
             { value: "follow", label: "Follow" },
-            {
-              value: "text",
-              label: (
-                <>
-                  <TypeIcon className="size-3" aria-hidden /> Text
-                </>
-              ),
-            },
-            {
-              value: "auto",
-              label: (
-                <>
-                  <RefreshCw className="size-3" aria-hidden /> Auto
-                </>
-              ),
-            },
+            ...(editingPrimaryFilament
+              ? [
+                  {
+                    value: "text" as const,
+                    label: (
+                      <>
+                        <TypeIcon className="size-3" aria-hidden /> Text
+                      </>
+                    ),
+                  },
+                  {
+                    value: "auto" as const,
+                    label: (
+                      <>
+                        <RefreshCw className="size-3" aria-hidden /> Auto
+                      </>
+                    ),
+                  },
+                ]
+              : []),
           ]}
           onChange={selectSource}
         />

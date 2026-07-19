@@ -687,6 +687,8 @@ export interface HeroWaveBackgroundProps {
   fadeInDuration?: number;
   /** CSS easing preset or cubic-bezier control points for the initial reveal. */
   fadeInEasing?: HeroWaveFadeEasing;
+  /** Includes the glass overlay in the initial scene fade when enabled. */
+  fadeInAffectsGlassText?: boolean;
   paused?: boolean;
   /** Controlled animation time in seconds. */
   time?: number;

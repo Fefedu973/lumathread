@@ -1,0 +1,213 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "lumathread",
+  "homepage": "https://fefedu973.github.io/lumathread/",
+  "items": [
+    {
+      "name": "lumathread",
+      "type": "registry:ui",
+      "title": "LumaThread",
+      "description": "A composable WebGL luminous-filament renderer for React with HDR paths, pointer interaction, glass masks, dot fields and multi-filament scenes.",
+      "author": "Fefedu973",
+      "files": [
+        {
+          "path": "src/index.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/index.ts"
+        },
+        {
+          "path": "src/hero-wave-background.tsx",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/hero-wave-background.tsx"
+        },
+        {
+          "path": "src/types.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/types.ts"
+        },
+        {
+          "path": "src/math.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/math.ts"
+        },
+        {
+          "path": "src/trajectory.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/trajectory.ts"
+        },
+        {
+          "path": "src/animation/easing.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/animation/easing.ts"
+        },
+        {
+          "path": "src/audio/music-runtime.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/audio/music-runtime.ts"
+        },
+        {
+          "path": "src/audio/use-music-visualizer.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/audio/use-music-visualizer.ts"
+        },
+        {
+          "path": "src/config/defaults.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/config/defaults.ts"
+        },
+        {
+          "path": "src/config/models.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/config/models.ts"
+        },
+        {
+          "path": "src/config/resolved-settings.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/config/resolved-settings.ts"
+        },
+        {
+          "path": "src/config/settings.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/config/settings.ts"
+        },
+        {
+          "path": "src/dom/glass-text-target.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/dom/glass-text-target.ts"
+        },
+        {
+          "path": "src/geometry/integral-geometry.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/geometry/integral-geometry.ts"
+        },
+        {
+          "path": "src/geometry/path-sampling.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/geometry/path-sampling.ts"
+        },
+        {
+          "path": "src/geometry/propagation.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/geometry/propagation.ts"
+        },
+        {
+          "path": "src/interaction/filament-disturbance.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/interaction/filament-disturbance.ts"
+        },
+        {
+          "path": "src/presets/hero-orbit.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/presets/hero-orbit.ts"
+        },
+        {
+          "path": "src/rendering/color.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/color.ts"
+        },
+        {
+          "path": "src/rendering/constants.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/constants.ts"
+        },
+        {
+          "path": "src/rendering/glass-mask.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/glass-mask.ts"
+        },
+        {
+          "path": "src/rendering/profile-textures.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/profile-textures.ts"
+        },
+        {
+          "path": "src/rendering/shaders.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/shaders.ts"
+        },
+        {
+          "path": "src/rendering/webgl-resources.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/webgl-resources.ts"
+        },
+        {
+          "path": "src/runtime/cache-keys.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/cache-keys.ts"
+        },
+        {
+          "path": "src/runtime/draw-common.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/draw-common.ts"
+        },
+        {
+          "path": "src/runtime/draw-controller.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/draw-controller.ts"
+        },
+        {
+          "path": "src/runtime/draw-types.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/draw-types.ts"
+        },
+        {
+          "path": "src/runtime/follow-controller.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/follow-controller.ts"
+        },
+        {
+          "path": "src/runtime/geometry-controller.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/geometry-controller.ts"
+        },
+        {
+          "path": "src/runtime/glass-terrain-renderer.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/glass-terrain-renderer.ts"
+        },
+        {
+          "path": "src/runtime/HdrHeroWaveBackground.tsx",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/HdrHeroWaveBackground.tsx"
+        },
+        {
+          "path": "src/runtime/path-renderer.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/path-renderer.ts"
+        },
+        {
+          "path": "src/runtime/resource-manager.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/resource-manager.ts"
+        },
+        {
+          "path": "src/runtime/sine-renderer.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/sine-renderer.ts"
+        },
+        {
+          "path": "src/runtime/state.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/state.ts"
+        },
+        {
+          "path": "src/runtime/use-glass-text-dom-target.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/use-glass-text-dom-target.ts"
+        },
+        {
+          "path": "src/runtime/use-hero-wave-renderer.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/runtime/use-hero-wave-renderer.ts"
+        }
+      ],
+      "docs": "Install directly with `bunx shadcn@latest add https://fefedu973.github.io/lumathread/r/lumathread.json`, then import with `import { LumaThread } from \"@/components/ui/lumathread\"`. For a reusable namespace, run `bunx shadcn@latest registry add @lumathread=https://fefedu973.github.io/lumathread/r/{name}.json` and then `bunx shadcn@latest add @lumathread/lumathread`.",
+      "categories": ["animation", "background", "webgl"],
+      "meta": {
+        "demo": "https://fefedu973.github.io/lumathread/",
+        "lab": "https://fefedu973.github.io/lumathread/lab/",
+        "source": "https://github.com/Fefedu973/lumathread"
+      }
+    }
+  ]
+}
