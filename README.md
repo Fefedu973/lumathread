@@ -7,6 +7,15 @@ be developed, tested, and versioned independently from the product.
 The API is still being stabilized, but the component is distributed as editable
 source through its shadcn registry.
 
+## Demo
+
+Explore the live component showcase, complete API reference, and full visual
+laboratory at [fefedu973.github.io/lumathread](https://fefedu973.github.io/lumathread/).
+
+
+https://github.com/user-attachments/assets/3323b88a-c341-439f-a00d-8d49ca5c9455
+
+
 ## Highlights
 
 - Analytic sine, organic, custom, SVG, and pointer-follow paths
@@ -19,16 +28,6 @@ source through its shadcn registry.
 - Glass-only blur/fade entrances and optional DOM-aligned typography
 - Music-reactive deformation and material response
 - Dark and light rendering themes
-
-## Demo
-
-Explore the live component showcase, complete API reference, and full visual
-laboratory at [fefedu973.github.io/lumathread](https://fefedu973.github.io/lumathread/).
-
-[![LumaThread launch film](media/lumathread-launch-preview.png)](media/lumathread-launch.mp4)
-
-- [Watch the LumaThread launch film](media/lumathread-launch.mp4)
-- [Watch LumaThread in the OpenBacktest landing page](apps/video/public/openbacktest-landing.mp4)
 
 ## Development
 
