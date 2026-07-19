@@ -24,7 +24,8 @@ const HOLD_SECONDS = HOLD_FRAMES / FPS;
 // Solve ∫(1 + a·u²)du over the tail so the ramp lands just before the end
 // of the recording: hold + tail + a·tail³/3 = media − margin.
 const ACCEL =
-  ((MEDIA_SECONDS - 0.35 - HOLD_SECONDS - TAIL_SECONDS) * 3) / TAIL_SECONDS ** 3;
+  ((MEDIA_SECONDS - 0.35 - HOLD_SECONDS - TAIL_SECONDS) * 3) /
+  TAIL_SECONDS ** 3;
 
 const speedAt = (frame: number) =>
   frame < HOLD_FRAMES ? 1 : 1 + ACCEL * ((frame - HOLD_FRAMES) / FPS) ** 2;
