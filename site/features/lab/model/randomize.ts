@@ -387,6 +387,8 @@ export function randomizeLabState(
     glassShape: pick(random, ["text", "svg"]),
     glassDomTargetEnabled: false,
     glassFontSize: between(random, 48, 240),
+    glassTextAlign: pick(random, ["center", "left"]),
+    glassBaselineOffset: chance(random, 0.65) ? 0 : between(random, 16, 180),
     glassCenterX: between(random, 22, 78),
     glassCenterY: between(random, 22, 78),
     glassMaxWidth: between(random, 0.35, 0.9),

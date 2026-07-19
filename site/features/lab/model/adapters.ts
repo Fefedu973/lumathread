@@ -272,6 +272,8 @@ export function buildBackgroundProps(state: LabState): HeroWaveBackgroundProps {
       svgPath: state.glassSvgPath,
       svgViewBox: state.glassSvgViewBox,
       fontSize: state.glassFontSize,
+      textAlign: state.glassTextAlign,
+      baselineOffset: state.glassBaselineOffset,
       center: {
         x: state.glassCenterX / 100,
         y: state.glassCenterY / 100,

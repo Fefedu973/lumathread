@@ -7,7 +7,9 @@ export function trackedTextWidth(
   context: CanvasRenderingContext2D,
   text: string,
   letterSpacing: number,
+  nativeLetterSpacing = false,
 ) {
+  if (nativeLetterSpacing) return context.measureText(text).width;
   return (
     context.measureText(text).width +
     Math.max(0, text.length - 1) * letterSpacing
@@ -19,6 +21,7 @@ export function wrapGlassText(
   text: string,
   maximumWidth: number,
   letterSpacing: number,
+  nativeLetterSpacing = false,
 ) {
   const lines: string[] = [];
   for (const paragraph of text.split("\n")) {
@@ -32,7 +35,12 @@ export function wrapGlassText(
       const candidate = line ? `${line} ${word}` : word;
       if (
         line &&
-        trackedTextWidth(context, candidate, letterSpacing) > maximumWidth
+        trackedTextWidth(
+          context,
+          candidate,
+          letterSpacing,
+          nativeLetterSpacing,
+        ) > maximumWidth
       ) {
         lines.push(line);
         line = word;
@@ -48,16 +56,29 @@ export function wrapGlassText(
 export function drawTrackedText(
   context: CanvasRenderingContext2D,
   text: string,
-  centerX: number,
+  left: number,
   baselineY: number,
   letterSpacing: number,
+  nativeLetterSpacing = false,
 ) {
-  const width = trackedTextWidth(context, text, letterSpacing);
-  let x = centerX - width * 0.5;
+  if (nativeLetterSpacing) {
+    context.fillText(text, left, baselineY);
+    return;
+  }
+  let x = left;
   for (const character of text) {
     context.fillText(character, x, baselineY);
     x += context.measureText(character).width + letterSpacing;
   }
+}
+
+export function configureCanvasLetterSpacing(
+  context: CanvasRenderingContext2D,
+  letterSpacing: number,
+) {
+  if (typeof Reflect.get(context, "letterSpacing") !== "string") return false;
+  Reflect.set(context, "letterSpacing", `${letterSpacing}px`);
+  return true;
 }
 
 export const HERO_GLASS_MASK_MAX_DIMENSION = 1280;
@@ -202,16 +223,29 @@ export function renderGlassTextMask(
   }
   if (!settings.text.trim()) return;
   const letterSpacing = settings.letterSpacing * dpr;
+  const nativeLetterSpacing = configureCanvasLetterSpacing(
+    context,
+    letterSpacing,
+  );
   const layoutAtSize = (fontSize: number) => {
     context.font = `${settings.fontWeight} ${fontSize}px ${settings.fontFamily}`;
     const lines =
       settings.textWrap === "explicit"
         ? settings.text.split("\n")
-        : wrapGlassText(context, settings.text, maximumWidth, letterSpacing);
+        : wrapGlassText(
+            context,
+            settings.text,
+            maximumWidth,
+            letterSpacing,
+            nativeLetterSpacing,
+          );
     const lineHeight = fontSize * settings.lineHeight;
     const textWidth = lines.reduce(
       (maximum, line) =>
-        Math.max(maximum, trackedTextWidth(context, line, letterSpacing)),
+        Math.max(
+          maximum,
+          trackedTextWidth(context, line, letterSpacing, nativeLetterSpacing),
+        ),
       0,
     );
     return {
@@ -242,14 +276,34 @@ export function renderGlassTextMask(
   context.textAlign = "left";
   context.textBaseline = "alphabetic";
   const top = height * settings.centerY - layout.height * 0.5;
-  const baselineOffset = layout.fontSize * 0.79;
+  const probeMetrics = context.measureText("Hg");
+  const ascent = probeMetrics.fontBoundingBoxAscent;
+  const descent = probeMetrics.fontBoundingBoxDescent;
+  const baselineOffset =
+    settings.baselineOffset > 0
+      ? (settings.baselineOffset * layout.fontSize) / settings.fontSize
+      : Number.isFinite(ascent) && Number.isFinite(descent)
+        ? (layout.lineHeight - (ascent + descent)) * 0.5 + ascent
+        : layout.fontSize * 0.79;
+  const blockLeft = width * settings.centerX - maximumWidth * 0.5;
   layout.lines.forEach((line, index) => {
+    const lineWidth = trackedTextWidth(
+      context,
+      line,
+      letterSpacing,
+      nativeLetterSpacing,
+    );
+    const lineLeft =
+      settings.textAlign === "left"
+        ? blockLeft
+        : width * settings.centerX - lineWidth * 0.5;
     drawTrackedText(
       context,
       line,
-      width * settings.centerX,
+      lineLeft,
       top + index * layout.lineHeight + baselineOffset,
       letterSpacing,
+      nativeLetterSpacing,
     );
   });
 }

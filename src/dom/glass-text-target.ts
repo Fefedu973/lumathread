@@ -11,6 +11,8 @@ export interface GlassTextDomSnapshot {
   fontSize: number;
   lineHeight: number;
   letterSpacing: number;
+  textAlign: "center" | "left";
+  baselineOffset: number;
   centerX: number;
   centerY: number;
   maxWidth: number;
@@ -136,6 +138,25 @@ function targetPadding(config: HeroWaveGlassTextDomConfig) {
   };
 }
 
+function measuredTextAlign(style: CSSStyleDeclaration): "center" | "left" {
+  if (style.textAlign === "left") return "left";
+  if (style.textAlign === "start" && style.direction !== "rtl") return "left";
+  return "center";
+}
+
+function measureFirstLineBaseline(element: HTMLElement, targetRect: DOMRect) {
+  const probe = document.createElement("span");
+  probe.setAttribute("aria-hidden", "true");
+  probe.style.cssText =
+    "display:inline-block;width:0;height:0;padding:0;margin:0;border:0;vertical-align:baseline;";
+  element.insertBefore(probe, element.firstChild);
+  const baselineOffset = probe.getBoundingClientRect().bottom - targetRect.top;
+  probe.remove();
+  return Number.isFinite(baselineOffset) && baselineOffset > 0
+    ? baselineOffset
+    : 0;
+}
+
 export function resolveGlassTextDomTarget(
   target: HeroWaveDomTarget | null | undefined,
 ): HTMLElement | null {
@@ -173,6 +194,7 @@ export function measureGlassTextDomTarget(
   const lineHeightPx = finiteCssNumber(style.lineHeight, fontSize * 1.2);
   const padding = targetPadding(config);
   const renderedText = renderedDomText(element, lineHeightPx);
+  const baselineOffset = measureFirstLineBaseline(element, targetRect);
 
   return {
     text: transformText(renderedText.trim(), style.textTransform),
@@ -181,6 +203,8 @@ export function measureGlassTextDomTarget(
     fontSize,
     lineHeight: lineHeightPx / Math.max(fontSize, 0.0001),
     letterSpacing: finiteCssNumber(style.letterSpacing, 0),
+    textAlign: measuredTextAlign(style),
+    baselineOffset,
     centerX:
       (targetRect.left + targetRect.width * 0.5 - canvasRect.left) /
       canvasRect.width,
@@ -201,7 +225,8 @@ export function sameGlassTextDomSnapshot(
   if (
     left.text !== right.text ||
     left.fontFamily !== right.fontFamily ||
-    left.fontWeight !== right.fontWeight
+    left.fontWeight !== right.fontWeight ||
+    left.textAlign !== right.textAlign
   ) {
     return false;
   }
@@ -209,6 +234,7 @@ export function sameGlassTextDomSnapshot(
     "fontSize",
     "lineHeight",
     "letterSpacing",
+    "baselineOffset",
     "centerX",
     "centerY",
     "maxWidth",
@@ -238,6 +264,8 @@ export function applyGlassTextDomSnapshot(
           fontSize: snapshot.fontSize,
           lineHeight: snapshot.lineHeight,
           letterSpacing: snapshot.letterSpacing,
+          textAlign: snapshot.textAlign,
+          baselineOffset: snapshot.baselineOffset,
         }
       : {}),
     center: { x: snapshot.centerX, y: snapshot.centerY },

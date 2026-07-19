@@ -270,6 +270,48 @@ export function GlassMaskControls() {
         }
       />
       <div className="grid grid-cols-2 gap-2">
+        <Select
+          value={state.glassTextAlign}
+          disabled={
+            !state.glassTextEnabled ||
+            (domTracking && state.glassDomSyncTypography)
+          }
+          onValueChange={(value) => {
+            if (value !== "center" && value !== "left") return;
+            setState((previous) => ({
+              ...previous,
+              glassTextAlign: value,
+            }));
+          }}
+        >
+          <SelectTrigger size="sm" aria-label="Glass text alignment">
+            <SelectValue placeholder="Text alignment" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="center">Centered lines</SelectItem>
+            <SelectItem value="left">Left-aligned lines</SelectItem>
+          </SelectContent>
+        </Select>
+        <NumberSlider
+          label="Baseline offset"
+          value={state.glassBaselineOffset}
+          min={0}
+          max={256}
+          step={1}
+          suffix="px"
+          disabled={
+            !state.glassTextEnabled ||
+            (domTracking && state.glassDomSyncTypography)
+          }
+          onChange={(value) =>
+            setState((previous) => ({
+              ...previous,
+              glassBaselineOffset: value,
+            }))
+          }
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
         <NumberSlider
           label="Center X"
           value={state.glassCenterX}

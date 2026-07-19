@@ -129,6 +129,8 @@ export interface ResolvedGlassText {
   fontSize: number;
   lineHeight: number;
   letterSpacing: number;
+  textAlign: "center" | "left";
+  baselineOffset: number;
   textWrap: "auto" | "explicit";
   centerX: number;
   centerY: number;

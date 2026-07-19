@@ -60,10 +60,22 @@ export function useGlassTextDomTarget(
       const canvas = canvasRef.current;
       const element = resolveGlassTextDomTarget(target);
       observeElement(element);
+      // Baseline measurement briefly inserts a zero-size probe. Disconnecting
+      // prevents that internal probe from scheduling another measurement.
+      elementObserver?.disconnect();
       const next =
         canvas && element
           ? measureGlassTextDomTarget(canvas, element, dom)
           : null;
+      if (element) {
+        elementObserver?.observe(element, {
+          attributes: true,
+          characterData: true,
+          childList: true,
+          subtree: true,
+          attributeFilter: ["class", "style", "aria-label"],
+        });
+      }
       setSnapshot((current) =>
         sameGlassTextDomSnapshot(current, next) ? current : next,
       );

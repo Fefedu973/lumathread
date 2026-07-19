@@ -274,6 +274,8 @@ const INITIAL_STATE_BASE: LabState = {
   glassSvgPath: SVG_LOOP,
   glassSvgViewBox: [0, 0, 200, 110],
   glassFontSize: 96,
+  glassTextAlign: "center",
+  glassBaselineOffset: 0,
   glassCenterX: 50,
   glassCenterY: 50,
   glassMaxWidth: 0.82,

@@ -350,6 +350,8 @@ export interface LabState {
   glassSvgPath: string;
   glassSvgViewBox: [number, number, number, number];
   glassFontSize: number;
+  glassTextAlign: "center" | "left";
+  glassBaselineOffset: number;
   glassCenterX: number;
   glassCenterY: number;
   glassMaxWidth: number;

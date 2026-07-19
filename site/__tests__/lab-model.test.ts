@@ -139,6 +139,8 @@ describe("lab model", () => {
     state.glassIntroDuration = 720;
     state.glassIntroCurvePreset = "custom";
     state.glassIntroCurve = [0.2, 0.4, 0.7, 1];
+    state.glassTextAlign = "left";
+    state.glassBaselineOffset = 64;
 
     const props = buildBackgroundProps(state);
 
@@ -165,6 +167,8 @@ describe("lab model", () => {
         syncContent: true,
         syncTypography: true,
       },
+      textAlign: "left",
+      baselineOffset: 64,
       intro: {
         delay: 180,
         duration: 720,

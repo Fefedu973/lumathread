@@ -1465,6 +1465,20 @@ export const API_REFERENCE: PropGroup[] = [
         description: "Letter spacing in CSS pixels.",
       },
       {
+        name: "textAlign",
+        type: '"center" | "left"',
+        defaultValue: '"center"',
+        description:
+          "Aligns each rendered line within the glass text block. Left alignment is useful when matching a DOM heading.",
+      },
+      {
+        name: "baselineOffset",
+        type: "number",
+        defaultValue: "0",
+        description:
+          "Distance in CSS pixels from the top of a line box to its baseline. Zero derives the baseline from canvas font metrics.",
+      },
+      {
         name: "wrap",
         type: '"auto" | "explicit"',
         defaultValue: '"auto"',
@@ -1516,7 +1530,7 @@ export const API_REFERENCE: PropGroup[] = [
         type: "boolean",
         defaultValue: "true",
         description:
-          "Uses the target's computed font family, weight, size, line height, and letter spacing.",
+          "Uses the target's computed font family, weight, size, line height, letter spacing, alignment, and measured baseline.",
       },
       {
         name: "dom.padding",

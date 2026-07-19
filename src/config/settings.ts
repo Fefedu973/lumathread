@@ -651,6 +651,13 @@ export function resolveOneSettings(
       -32,
       64,
     ),
+    textAlign: glassInput?.textAlign ?? inheritedGlass.textAlign,
+    baselineOffset: finiteClamped(
+      glassInput?.baselineOffset,
+      inheritedGlass.baselineOffset,
+      0,
+      512,
+    ),
     textWrap: glassInput?.wrap ?? inheritedGlass.textWrap,
     centerX: finiteClamped(glassInput?.center?.x, inheritedGlass.centerX, 0, 1),
     centerY: finiteClamped(glassInput?.center?.y, inheritedGlass.centerY, 0, 1),

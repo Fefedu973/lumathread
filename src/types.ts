@@ -473,7 +473,7 @@ export interface HeroWaveGlassTextDomConfig {
   target: HeroWaveDomTarget;
   /** Reads the rendered element text, including explicit line breaks. */
   syncContent?: boolean;
-  /** Reads font family, weight, size, line height, and letter spacing. */
+  /** Reads typography, text alignment, and baseline placement. */
   syncTypography?: boolean;
   /** Extra room around the measured element, in CSS pixels. */
   padding?: number | { x?: number; y?: number };
@@ -489,6 +489,13 @@ export interface HeroWaveGlassTextConfig {
   fontSize?: number;
   lineHeight?: number;
   letterSpacing?: number;
+  /** Horizontal alignment of wrapped lines inside the text block. */
+  textAlign?: "center" | "left";
+  /**
+   * Distance in CSS pixels from the top of each line box to its baseline.
+   * Zero derives the baseline from font metrics.
+   */
+  baselineOffset?: number;
   /** Automatic word wrapping, or explicit newlines only. */
   wrap?: "auto" | "explicit";
   /** Center of the glass mask in normalized canvas coordinates. */

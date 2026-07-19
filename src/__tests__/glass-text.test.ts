@@ -15,6 +15,8 @@ const snapshot: GlassTextDomSnapshot = {
   fontSize: 72,
   lineHeight: 1.05,
   letterSpacing: -1.5,
+  textAlign: "left",
+  baselineOffset: 58,
   centerX: 0.42,
   centerY: 0.31,
   maxWidth: 0.64,
@@ -83,6 +85,8 @@ describe("glass text configuration", () => {
       fontSize: 72,
       lineHeight: 1.05,
       letterSpacing: -1.5,
+      textAlign: "left",
+      baselineOffset: 58,
       center: { x: 0.42, y: 0.31 },
       maxWidth: 0.64,
       maxHeight: 0.18,
@@ -124,7 +128,23 @@ describe("glass text configuration", () => {
 
     expect(resolved.text).toBe("Fallback");
     expect(resolved.fontSize).toBe(48);
+    expect(resolved.textAlign).toBeUndefined();
+    expect(resolved.baselineOffset).toBeUndefined();
     expect(resolved.center).toEqual({ x: 0.42, y: 0.31 });
+  });
+
+  test("resolves explicit text alignment and baseline controls", () => {
+    const settings = resolveSettings({
+      glassText: {
+        enabled: true,
+        text: "Aligned glass",
+        textAlign: "left",
+        baselineOffset: 84,
+      },
+    });
+
+    expect(settings.glassText.textAlign).toBe("left");
+    expect(settings.glassText.baselineOffset).toBe(84);
   });
 
   test("keeps tracked glass disabled until the DOM target has valid bounds", () => {
