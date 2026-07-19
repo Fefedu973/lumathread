@@ -13,8 +13,10 @@ import type {
 export const DEMO_PALETTE: NonNullable<HeroWaveBackgroundProps["palette"]> = {
   stops: [
     { id: "blue", color: "#315bff", offset: 0 },
-    { id: "cyan", color: "#22d3ee", offset: 0.48 },
-    { id: "green", color: "#22f25f", offset: 1 },
+    { id: "cyan-in", color: "#22d3ee", offset: 0.25 },
+    { id: "green", color: "#22f25f", offset: 0.5 },
+    { id: "cyan-out", color: "#22d3ee", offset: 0.75 },
+    { id: "blue-loop", color: "#315bff", offset: 1 },
   ],
   interpolation: "oklab",
   wrap: "repeat",
@@ -196,27 +198,48 @@ export function terrainPreset(theme: HeroWaveTheme): HeroWaveBackgroundProps {
       tailTaper: 0.2,
       headTaper: 0.12,
     },
-    material: { preset: "soft-aurora", intensity: 0.8, glow: 1.05 },
+    material: { preset: "soft-aurora", intensity: 0.72, glow: 0.98 },
+    palette: {
+      stops: [
+        { id: "terrain-white-start", color: "#ffffff", offset: 0 },
+        { id: "terrain-white-end", color: "#ffffff", offset: 1 },
+      ],
+      interpolation: "oklab",
+      wrap: "mirror",
+      speed: 0.2,
+    },
     dots: {
       enabled: true,
       mode: "terrain",
-      opacity: theme === "light" ? 0.5 : 0.75,
-      twinkle: 0.2,
+      opacity: theme === "light" ? 0.36 : 0.58,
+      twinkle: 0.24,
+      reflect: 0.42,
       terrain: {
-        rows: 34,
-        amplitude: 0.9,
-        speed: 0.6,
-        viewAngle: 0.62,
-        pointSize: 2.4,
-        edgeFade: 0.24,
+        columns: 94,
+        rows: 48,
+        width: 7.4,
+        depth: 5.8,
+        amplitude: 0.45,
+        speed: 0.48,
+        viewAngle: 18,
+        cameraDistance: 2.1,
+        frequency: 1.35,
+        pointSize: 2,
+        edgeFade: 0.34,
+        fit: "cover",
+        contentFade: 0.24,
+        colorLow: "#ffffff",
+        colorHigh: "#ffffff",
       },
       interaction: {
         enabled: true,
         radius: 220,
         softness: 0.75,
-        brightness: 0.4,
-        magnification: 1.05,
-        terrainDisplacement: 0.5,
+        brightness: 0.24,
+        color: "#ffffff",
+        colorStrength: 0,
+        magnification: 1.03,
+        terrainDisplacement: 0.42,
       },
     },
   };
@@ -313,23 +336,82 @@ export function palettePreset(theme: HeroWaveTheme): HeroWaveBackgroundProps {
   };
 }
 
+const GLYPH_VIEW_BOX = [0, 0, 400, 205] as const;
+const GLYPH_CENTER_Y = 102.5;
+const GLYPH_RADIUS = 38;
+const GLYPH_CENTERS = [55, 150, 250, 345] as const;
+
+function svgPoint(x: number, y: number) {
+  return `${x.toFixed(2)} ${y.toFixed(2)}`;
+}
+
+function trianglePath(cx: number, cy: number, radius: number) {
+  return `M ${svgPoint(cx, cy - radius)} L ${svgPoint(cx + radius * 0.9, cy + radius * 0.72)} L ${svgPoint(cx - radius * 0.9, cy + radius * 0.72)} Z`;
+}
+
+function circlePath(cx: number, cy: number, radius: number) {
+  return `M ${svgPoint(cx - radius, cy)} A ${radius} ${radius} 0 1 0 ${svgPoint(cx + radius, cy)} A ${radius} ${radius} 0 1 0 ${svgPoint(cx - radius, cy)}`;
+}
+
+function crossPath(cx: number, cy: number, radius: number) {
+  const arm = radius;
+  const half = radius * 0.19;
+  const upright = [
+    [-half, -arm],
+    [half, -arm],
+    [half, -half],
+    [arm, -half],
+    [arm, half],
+    [half, half],
+    [half, arm],
+    [-half, arm],
+    [-half, half],
+    [-arm, half],
+    [-arm, -half],
+    [-half, -half],
+  ] as const;
+  const rotation = Math.SQRT1_2;
+  const points = upright.map(([x, y]) =>
+    svgPoint(cx + (x - y) * rotation, cy + (x + y) * rotation),
+  );
+  return `M ${points.join(" L ")} Z`;
+}
+
+function squarePath(cx: number, cy: number, radius: number) {
+  const half = radius * 0.84;
+  return `M ${svgPoint(cx - half, cy - half)} L ${svgPoint(cx + half, cy - half)} L ${svgPoint(cx + half, cy + half)} L ${svgPoint(cx - half, cy + half)} Z`;
+}
+
+const GLYPH_PATHS = [
+  trianglePath(GLYPH_CENTERS[0], GLYPH_CENTER_Y, GLYPH_RADIUS),
+  circlePath(GLYPH_CENTERS[1], GLYPH_CENTER_Y, GLYPH_RADIUS),
+  crossPath(GLYPH_CENTERS[2], GLYPH_CENTER_Y, GLYPH_RADIUS),
+  squarePath(GLYPH_CENTERS[3], GLYPH_CENTER_Y, GLYPH_RADIUS),
+] as const;
+
 export function svgPreset(theme: HeroWaveTheme): HeroWaveBackgroundProps {
   return {
     ...shared(theme),
-    path: {
-      mode: "svg",
-      svgPath:
-        "M 8 50 C 22 12, 40 12, 50 38 C 58 58, 70 62, 80 48 C 88 36, 94 40, 96 50",
-      svgViewBox: [0, 0, 100, 100],
-    },
-    shape: { waveY: 0.5, strength: 1, scale: 0.66, frequency: 1.3 },
+    shape: { waveY: 0.5, strength: 1, scale: 0.92, frequency: 1.3 },
     motion: {
-      mode: "travel",
-      speed: 0.55,
-      segmentLength: 0.8,
-      tailTaper: 0.25,
-      headTaper: 0.1,
+      mode: "anchored",
+      speed: 0.5,
+      segmentLength: 1,
+      tailTaper: 0,
+      headTaper: 0,
     },
-    material: { preset: "mist", intensity: 0.85, glow: 1.1 },
+    material: { preset: "neon", intensity: 0.84, glow: 1.08 },
+    filaments: GLYPH_PATHS.map((svgPath, index) => ({
+      id: `playstation-glyph-${index}`,
+      path: {
+        mode: "svg",
+        svgPath,
+        svgViewBox: GLYPH_VIEW_BOX,
+        closed: true,
+        closedLoopTaper: false,
+      },
+      timeOffset: index * 0.42,
+      palette: { hue: index * 18 - 27 },
+    })),
   };
 }

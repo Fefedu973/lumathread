@@ -20,6 +20,16 @@ source through its shadcn registry.
 - Music-reactive deformation and material response
 - Dark and light rendering themes
 
+## Demo
+
+Explore the live component showcase, complete API reference, and full visual
+laboratory at [fefedu973.github.io/lumathread](https://fefedu973.github.io/lumathread/).
+
+[![LumaThread launch film](media/lumathread-launch-preview.png)](media/lumathread-launch.mp4)
+
+- [Watch the LumaThread launch film](media/lumathread-launch.mp4)
+- [Watch LumaThread in the OpenBacktest landing page](apps/video/public/openbacktest-landing.mp4)
+
 ## Development
 
 ```bash
