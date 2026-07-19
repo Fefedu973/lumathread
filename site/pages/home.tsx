@@ -7,7 +7,10 @@ import {
   createHeroOrbitPreset,
   type HeroOrbitLayout,
 } from "@/presets/hero-orbit";
-import { ApiReference } from "../components/demo/api-reference";
+import {
+  ApiReference,
+  ApiReferenceMarkdownButton,
+} from "../components/demo/api-reference";
 import { DemoSection } from "../components/demo-section";
 import { FeatureGrid } from "../components/demo/feature-demos";
 import { InstallTabs } from "../components/demo/install-tabs";
@@ -273,6 +276,7 @@ export function HomePage() {
           index="04 — API"
           title="Props reference"
           description="The full public surface of the registry component, grouped by configuration domain. LumaThread and LumaThreadScene are aliases of HeroWaveBackground and HeroWaveScene."
+          action={<ApiReferenceMarkdownButton />}
         >
           <div className="mb-8 overflow-x-auto rounded-xl border bg-card/50">
             <pre className="min-w-[560px] p-4 font-mono text-xs leading-relaxed text-muted-foreground">
