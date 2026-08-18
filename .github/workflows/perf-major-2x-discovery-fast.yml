@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - perf/major-2x-discovery-fast
+  pull_request:
+    branches:
+      - perf/major-2x-specializations
   workflow_dispatch:
 
 permissions:
@@ -111,13 +114,15 @@ jobs:
           cp vite.perf.config.ts baseline/vite.perf.config.ts
           cp tsconfig.perf.json baseline/tsconfig.perf.json
 
-      - name: Build baseline and candidate harnesses
+      - name: Build baseline and candidate
         run: |
-          bunx vite build --config vite.perf.config.ts \
+          bunx vite build \
+            --config vite.perf.config.ts \
             --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
           cd baseline
           bunx tsc -p tsconfig.perf.json --noEmit
-          bunx vite build --config vite.perf.config.ts \
+          bunx vite build \
+            --config vite.perf.config.ts \
             --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
 
       - name: Install visual diff dependencies
@@ -141,7 +146,7 @@ jobs:
             curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
           done
 
-      - name: Run paired CTA benchmark
+      - name: Run paired CTA discovery
         run: |
           bun perf/scripts/benchmark.mjs \
             --baseline http://127.0.0.1:4173 \
