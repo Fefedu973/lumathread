@@ -4,7 +4,7 @@ await import(
   new URL(
     `./apply-glass-bounds-experiment.mjs?mode=scissor&viewport=${Date.now()}`,
     import.meta.url,
-  ),
+  )
 );
 
 const rendererPath = "src/runtime/glass-terrain-renderer.ts";

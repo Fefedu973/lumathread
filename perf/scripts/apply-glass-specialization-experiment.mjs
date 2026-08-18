@@ -11,9 +11,7 @@ async function replaceOnce(path, before, after) {
     );
   }
   if (source.indexOf(before, first + before.length) >= 0) {
-    throw new Error(
-      `Expected unique block in ${path}: ${before.slice(0, 80)}`,
-    );
+    throw new Error(`Expected unique block in ${path}: ${before.slice(0, 80)}`);
   }
   await writeFile(
     path,

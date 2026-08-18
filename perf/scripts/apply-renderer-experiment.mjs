@@ -22,7 +22,7 @@ if (mode.includes("specialized")) {
     new URL(
       `./apply-glass-specialization-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
-    ),
+    )
   );
 }
 
@@ -31,7 +31,7 @@ if (mode.includes("viewport")) {
     new URL(
       `./apply-glass-viewport-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
-    ),
+    )
   );
 }
 
@@ -40,7 +40,7 @@ if (mode.startsWith("direct")) {
     new URL(
       `./apply-glass-direct-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
-    ),
+    )
   );
 }
 
