@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -90,7 +90,8 @@ class CdpClient {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id);
-        if (message.error) pending.reject(new Error(JSON.stringify(message.error)));
+        if (message.error)
+          pending.reject(new Error(JSON.stringify(message.error)));
         else pending.resolve(message.result ?? {});
         return;
       }
@@ -368,7 +369,9 @@ async function stopPointerMotion(client) {
 }
 
 function metricsToObject(metrics) {
-  return Object.fromEntries(metrics.metrics.map(({ name, value }) => [name, value]));
+  return Object.fromEntries(
+    metrics.metrics.map(({ name, value }) => [name, value]),
+  );
 }
 
 function metricDelta(before, after, name) {
@@ -382,12 +385,15 @@ function summarizeRun(payload, metricsBefore, metricsAfter) {
   const frameDeltas = finiteValues(payload.runtime.frameDeltasMs).filter(
     (value) => value > 0 && value < 250,
   );
-  const cpu = finiteValues(payload.runtime.samples.map((sample) => sample.cpuMs));
+  const cpu = finiteValues(
+    payload.runtime.samples.map((sample) => sample.cpuMs),
+  );
   const gpu = finiteValues(
     payload.runtime.samples.map((sample) => sample.gpuMs),
   );
   const elapsedMs =
-    payload.runtime.firstFrameAt !== null && payload.runtime.lastFrameAt !== null
+    payload.runtime.firstFrameAt !== null &&
+    payload.runtime.lastFrameAt !== null
       ? payload.runtime.lastFrameAt - payload.runtime.firstFrameAt
       : 0;
   const renderedFrames = payload.runtime.renderedFrames;
@@ -405,7 +411,8 @@ function summarizeRun(payload, metricsBefore, metricsAfter) {
       p99: percentile(frameDeltas, 0.99),
       dropped20msRatio:
         frameDeltas.length > 0
-          ? frameDeltas.filter((value) => value > 20).length / frameDeltas.length
+          ? frameDeltas.filter((value) => value > 20).length /
+            frameDeltas.length
           : null,
       dropped33msRatio:
         frameDeltas.length > 0
