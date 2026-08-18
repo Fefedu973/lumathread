@@ -65,9 +65,7 @@ async function replaceOnce(path, before, after) {
     .slice(evaluationsStart, evaluationsEnd)
     .replaceAll("  ) return;", "  ) discard;");
   next =
-    next.slice(0, evaluationsStart) +
-    evaluations +
-    next.slice(evaluationsEnd);
+    next.slice(0, evaluationsStart) + evaluations + next.slice(evaluationsEnd);
   await writeFile(shaderPath, next);
 }
 
