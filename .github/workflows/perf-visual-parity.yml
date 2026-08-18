@@ -36,10 +36,8 @@ jobs:
       matrix:
         experiment:
           - noop
-          - specialized-viewport
           - twinkle-path-core-output
-          - twinkle-uniform-cache-path-core-output
-          - twinkle-uniform-cache-path-core-output-specialized-viewport
+          - specialized-viewport
           - blur-3-specialized-viewport
           - blur-2-specialized-viewport
           - blur-1-specialized-viewport
@@ -64,6 +62,7 @@ jobs:
         run: |
           node perf/scripts/apply-renderer-experiment.mjs "${{ matrix.experiment }}"
           bunx biome format --write \
+            perf/harness/gl-profiler.js \
             src/rendering/shaders.ts \
             src/rendering/glass-mask.ts \
             src/rendering/webgl-resources.ts \
@@ -133,10 +132,10 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 5 \
+            --repeats 3 \
             --frames 24 \
-            --warmup-frames 16 \
-            --profile-frames 8
+            --warmup-frames 12 \
+            --profile-frames 6
 
       - name: Compare deterministic screenshots
         id: visual
@@ -173,6 +172,7 @@ jobs:
           name: renderer-perf-${{ matrix.experiment }}-${{ github.sha }}
           path: |
             perf-results
+            perf/harness/gl-profiler.js
             src/rendering/shaders.ts
             src/rendering/glass-mask.ts
             src/rendering/webgl-resources.ts
