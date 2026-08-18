@@ -6,8 +6,9 @@ import {
   aggregateRuns,
   captureSnapshot,
   compareAggregates,
+  comparePairedRuns,
   markdownSummary,
-  runSingleBenchmark,
+  runPairedBenchmark,
 } from "./benchmark-suite.mjs";
 
 async function main() {
@@ -142,17 +143,20 @@ async function main() {
           repeat % 2 === 0
             ? ["baseline", "candidate"]
             : ["candidate", "baseline"];
-        for (const variant of order) {
-          console.log(`  ${variant} repeat ${repeat + 1}/${options.repeats}`);
-          raw[variant].push(
-            await runSingleBenchmark(
-              chrome,
-              variant === "baseline" ? options.baseline : options.candidate,
-              scenario,
-              options,
-            ),
-          );
-        }
+        console.log(
+          `  paired repeat ${repeat + 1}/${options.repeats} (${order.join(" → ")})`,
+        );
+        const pair = await runPairedBenchmark(
+          chrome,
+          options.baseline,
+          options.candidate,
+          scenario,
+          options,
+          options.frames,
+          order,
+        );
+        raw.baseline.push(pair.baseline);
+        raw.candidate.push(pair.candidate);
       }
       const baseline = aggregateRuns(raw.baseline);
       const candidate = aggregateRuns(raw.candidate);
@@ -162,6 +166,7 @@ async function main() {
         baseline,
         candidate,
         comparison: compareAggregates(baseline, candidate),
+        paired: comparePairedRuns(raw.baseline, raw.candidate),
       });
       await writeFile(
         path.join(options.out, "benchmark-progress.json"),
@@ -180,18 +185,18 @@ async function main() {
             ? ["baseline", "candidate"]
             : ["candidate", "baseline"];
         const raw = { baseline: [], candidate: [] };
-        for (const build of order) {
-          console.log(`  ${profileVariant}: ${build}`);
-          raw[build].push(
-            await runSingleBenchmark(
-              chrome,
-              build === "baseline" ? options.baseline : options.candidate,
-              scenario,
-              options,
-              options.profileFrames,
-            ),
-          );
-        }
+        console.log(`  ${profileVariant}: paired ${order.join(" → ")}`);
+        const pair = await runPairedBenchmark(
+          chrome,
+          options.baseline,
+          options.candidate,
+          scenario,
+          options,
+          options.profileFrames,
+          order,
+        );
+        raw.baseline.push(pair.baseline);
+        raw.candidate.push(pair.candidate);
         const baseline = aggregateRuns(raw.baseline);
         const candidate = aggregateRuns(raw.candidate);
         profile.variants.push({
@@ -200,6 +205,7 @@ async function main() {
           baseline,
           candidate,
           comparison: compareAggregates(baseline, candidate),
+          paired: comparePairedRuns(raw.baseline, raw.candidate),
         });
       }
       result.profiles.push(profile);
