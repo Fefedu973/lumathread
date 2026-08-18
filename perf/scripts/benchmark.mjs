@@ -20,7 +20,7 @@ async function main() {
     recursive: true,
   });
 
-  const scenarios = [
+  const allScenarios = [
     {
       name: "hero-dark-desktop",
       scenario: "hero",
@@ -52,7 +52,7 @@ async function main() {
       viewport: { width: 412, height: 915, dpr: 2, mobile: true },
     },
   ];
-  const profileSurfaces = [
+  const allProfileSurfaces = [
     {
       name: "hero-dark-desktop",
       scenario: "hero",
@@ -67,7 +67,7 @@ async function main() {
     },
   ];
   const profileVariants = ["full", "no-glass", "path-only", "no-twinkle"];
-  const snapshots = [
+  const allSnapshots = [
     {
       name: "hero-dark-desktop-t0_35",
       scenario: "hero",
@@ -110,7 +110,19 @@ async function main() {
       time: 2.25,
       viewport: { width: 412, height: 915, dpr: 2, mobile: true },
     },
+    {
+      name: "cta-dark-mobile-2x-t2_25",
+      scenario: "cta",
+      theme: "dark",
+      time: 2.25,
+      viewport: { width: 412, height: 915, dpr: 2, mobile: true },
+    },
   ];
+  const matchesFocus = (entry) =>
+    options.focus === "all" || entry.scenario === options.focus;
+  const scenarios = allScenarios.filter(matchesFocus);
+  const profileSurfaces = allProfileSurfaces.filter(matchesFocus);
+  const snapshots = allSnapshots.filter(matchesFocus);
 
   const chrome = await startChrome();
   try {
