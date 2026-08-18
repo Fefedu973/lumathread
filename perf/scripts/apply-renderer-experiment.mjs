@@ -1,6 +1,14 @@
 const mode =
-  process.argv[2] ?? process.env.LUMATHREAD_RENDERER_EXPERIMENT ?? "combined";
-const supportedModes = new Set(["shader", "scissor", "blit", "combined"]);
+  process.argv[2] ??
+  process.env.LUMATHREAD_RENDERER_EXPERIMENT ??
+  "direct-specialized-viewport";
+const supportedModes = new Set([
+  "viewport",
+  "specialized",
+  "specialized-viewport",
+  "direct-viewport",
+  "direct-specialized-viewport",
+]);
 if (!supportedModes.has(mode)) {
   throw new Error(
     `Unknown renderer experiment ${JSON.stringify(mode)}. Expected one of: ${[
@@ -9,22 +17,30 @@ if (!supportedModes.has(mode)) {
   );
 }
 
-if (mode === "shader" || mode === "combined") {
+if (mode.includes("specialized")) {
   await import(
     new URL(
-      `./apply-renderer-optimization.mjs?experiment=${encodeURIComponent(mode)}`,
+      `./apply-glass-specialization-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
-    )
+    ),
   );
 }
 
-if (mode === "scissor" || mode === "blit" || mode === "combined") {
-  const boundsMode = mode === "scissor" ? "scissor" : "blit";
+if (mode.includes("viewport")) {
   await import(
     new URL(
-      `./apply-glass-bounds-experiment.mjs?mode=${boundsMode}&experiment=${encodeURIComponent(mode)}`,
+      `./apply-glass-viewport-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
-    )
+    ),
+  );
+}
+
+if (mode.startsWith("direct")) {
+  await import(
+    new URL(
+      `./apply-glass-direct-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
+      import.meta.url,
+    ),
   );
 }
 
