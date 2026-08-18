@@ -1,8 +1,9 @@
 const mode =
   process.argv[2] ??
   process.env.LUMATHREAD_RENDERER_EXPERIMENT ??
-  "direct-specialized-viewport";
+  "twinkle-uniform-cache-path-core-output-specialized-viewport";
 const supportedModes = new Set([
+  "noop",
   "viewport",
   "specialized",
   "specialized-viewport",
@@ -13,8 +14,13 @@ const supportedModes = new Set([
   "path-core-output",
   "twinkle-uniform-cache",
   "twinkle-path-core-output",
+  "twinkle-uniform-cache-path-core-output",
+  "twinkle-uniform-cache-path-core-output-specialized-viewport",
   "blur-minus-one",
   "blur-half",
+  "blur-1-specialized-viewport",
+  "blur-2-specialized-viewport",
+  "blur-3-specialized-viewport",
 ]);
 if (!supportedModes.has(mode)) {
   throw new Error(
@@ -73,6 +79,17 @@ if (mode.includes("viewport")) {
   await import(
     new URL(
       `./apply-glass-viewport-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
+      import.meta.url,
+    )
+  );
+}
+
+const blurMatch = /^blur-([123])-/.exec(mode);
+if (blurMatch) {
+  process.env.LUMATHREAD_GLASS_BLUR_PAIRS = blurMatch[1];
+  await import(
+    new URL(
+      `./apply-glass-blur-compression-experiment.mjs?experiment=${encodeURIComponent(mode)}`,
       import.meta.url,
     )
   );

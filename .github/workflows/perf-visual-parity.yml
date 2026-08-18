@@ -30,18 +30,19 @@ jobs:
   benchmark:
     name: benchmark (${{ matrix.experiment }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         experiment:
-          - twinkle
-          - uniform-cache
-          - path-core-output
-          - twinkle-uniform-cache
+          - noop
+          - specialized-viewport
           - twinkle-path-core-output
-          - blur-minus-one
-          - blur-half
+          - twinkle-uniform-cache-path-core-output
+          - twinkle-uniform-cache-path-core-output-specialized-viewport
+          - blur-3-specialized-viewport
+          - blur-2-specialized-viewport
+          - blur-1-specialized-viewport
     steps:
       - name: Check out candidate
         uses: actions/checkout@v4
@@ -132,10 +133,10 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 4 \
-            --frames 12 \
-            --warmup-frames 3 \
-            --profile-frames 6
+            --repeats 5 \
+            --frames 24 \
+            --warmup-frames 16 \
+            --profile-frames 8
 
       - name: Compare deterministic screenshots
         id: visual
