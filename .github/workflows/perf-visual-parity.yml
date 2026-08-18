@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - perf/visual-parity-renderer-optimization
+  pull_request:
   workflow_dispatch:
 
 permissions:
