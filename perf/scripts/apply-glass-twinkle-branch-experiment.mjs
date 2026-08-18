@@ -6,7 +6,9 @@ async function replaceOnce(before, after) {
   const source = await readFile(shaderPath, "utf8");
   const first = source.indexOf(before);
   if (first < 0) {
-    throw new Error(`Expected twinkle block not found: ${before.slice(0, 100)}`);
+    throw new Error(
+      `Expected twinkle block not found: ${before.slice(0, 100)}`,
+    );
   }
   if (source.indexOf(before, first + before.length) >= 0) {
     throw new Error(`Expected a unique twinkle block: ${before.slice(0, 100)}`);
