@@ -182,3 +182,5 @@ jobs:
       - name: Enforce visual parity gate
         if: always() && steps.visual.outcome == 'failure'
         run: exit 1
+
+# The workflow is intentionally isolated from the production optimization PR.
