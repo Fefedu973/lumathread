@@ -1,23 +1,30 @@
 import { writeFile } from "node:fs/promises";
 
 import {
+  dispatchPointer,
   evaluate,
   finiteValues,
   median,
   metricsToObject,
   openPage,
   sleep,
-  startPointerMotion,
-  stopPointerMotion,
+  stepFrame,
   summarizeRun,
   waitForHarness,
 } from "./benchmark-core.mjs";
 
-async function runSingleBenchmark(chrome, baseUrl, scenario, options) {
+async function runSingleBenchmark(
+  chrome,
+  baseUrl,
+  scenario,
+  options,
+  frameCount = options.frames,
+) {
   const query = new URLSearchParams({
     scenario: scenario.scenario,
     theme: scenario.theme,
     mode: "benchmark",
+    variant: scenario.variant ?? "full",
   });
   const page = await openPage(
     chrome,
@@ -26,8 +33,11 @@ async function runSingleBenchmark(chrome, baseUrl, scenario, options) {
   );
   try {
     await waitForHarness(page.client);
-    await startPointerMotion(page.client, scenario.scenario);
-    await sleep(options.warmupMs);
+    await sleep(50);
+    for (let frame = 0; frame < options.warmupFrames; frame += 1) {
+      await dispatchPointer(page.client, scenario.scenario, frame * 0.37);
+      await stepFrame(page.client);
+    }
     await evaluate(
       page.client,
       `window.__LUMATHREAD_HARNESS__.resetMeasurements()`,
@@ -35,11 +45,15 @@ async function runSingleBenchmark(chrome, baseUrl, scenario, options) {
     const metricsBefore = metricsToObject(
       await page.client.call("Performance.getMetrics"),
     );
-    await sleep(options.durationMs);
-    await sleep(350);
-    await stopPointerMotion(page.client);
-    await evaluate(page.client, `window.__LUMATHREAD_HARNESS__.pause()`);
-    await sleep(100);
+    const stepSamples = [];
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      await dispatchPointer(
+        page.client,
+        scenario.scenario,
+        0.35 + frame * 0.61,
+      );
+      stepSamples.push(await stepFrame(page.client));
+    }
     const metricsAfter = metricsToObject(
       await page.client.call("Performance.getMetrics"),
     );
@@ -51,11 +65,6 @@ async function runSingleBenchmark(chrome, baseUrl, scenario, options) {
         const debug = context?.getExtension("WEBGL_debug_renderer_info");
         return {
           runtime: {
-            samples: harness.samples,
-            frameDeltasMs: harness.frameDeltasMs,
-            renderedFrames: harness.renderedFrames,
-            firstFrameAt: harness.firstFrameAt,
-            lastFrameAt: harness.lastFrameAt,
             rendererStatus: harness.rendererStatus,
             rendererErrors: harness.rendererErrors,
           },
@@ -73,7 +82,7 @@ async function runSingleBenchmark(chrome, baseUrl, scenario, options) {
         };
       })()`,
     );
-    return summarizeRun(payload, metricsBefore, metricsAfter);
+    return summarizeRun(payload, metricsBefore, metricsAfter, stepSamples);
   } finally {
     await page.close();
   }
@@ -91,28 +100,25 @@ function aggregateRuns(runs) {
   };
   const counters = {};
   const counterNames = new Set(
-    runs.flatMap((run) => Object.keys(run.gl?.counters ?? {})),
+    runs.flatMap((run) => Object.keys(run.glPerFrame ?? {})),
   );
   for (const name of counterNames) {
-    counters[name] = aggregate((run) => run.gl.counters[name]);
+    counters[name] = aggregate((run) => run.glPerFrame[name]);
   }
   return {
     runCount: runs.length,
     fps: aggregate((run) => run.fps),
-    frameP50Ms: aggregate((run) => run.frameMs.p50),
-    frameP95Ms: aggregate((run) => run.frameMs.p95),
-    frameP99Ms: aggregate((run) => run.frameMs.p99),
-    dropped20msRatio: aggregate((run) => run.frameMs.dropped20msRatio),
-    cpuMeanMs: aggregate((run) => run.cpuMs.mean),
-    cpuP50Ms: aggregate((run) => run.cpuMs.p50),
-    cpuP95Ms: aggregate((run) => run.cpuMs.p95),
-    gpuMeanMs: aggregate((run) => run.gpuMs.mean),
-    gpuP50Ms: aggregate((run) => run.gpuMs.p50),
-    gpuP95Ms: aggregate((run) => run.gpuMs.p95),
+    wallMeanMs: aggregate((run) => run.wallMs.mean),
+    wallP50Ms: aggregate((run) => run.wallMs.p50),
+    wallP95Ms: aggregate((run) => run.wallMs.p95),
+    submitMeanMs: aggregate((run) => run.submitMs.mean),
+    submitP95Ms: aggregate((run) => run.submitMs.p95),
+    drainMeanMs: aggregate((run) => run.drainMs.mean),
+    drainP95Ms: aggregate((run) => run.drainMs.p95),
     taskDurationMs: aggregate((run) => run.browser.taskDurationMs),
     scriptDurationMs: aggregate((run) => run.browser.scriptDurationMs),
     jsHeapUsedBytes: aggregate((run) => run.browser.jsHeapUsedBytes),
-    glCounters: counters,
+    glPerFrame: counters,
     renderer: runs[0]?.renderer ?? null,
     webgl: runs[0]?.webgl ?? null,
   };
@@ -141,11 +147,12 @@ function compareAggregates(baseline, candidate) {
       candidate: candidate.fps.median,
       changePercent: percentChange(baseline.fps.median, candidate.fps.median),
     },
-    frameP95Ms: lowerIsBetter("frameP95Ms"),
-    cpuMeanMs: lowerIsBetter("cpuMeanMs"),
-    cpuP95Ms: lowerIsBetter("cpuP95Ms"),
-    gpuMeanMs: lowerIsBetter("gpuMeanMs"),
-    gpuP95Ms: lowerIsBetter("gpuP95Ms"),
+    wallMeanMs: lowerIsBetter("wallMeanMs"),
+    wallP95Ms: lowerIsBetter("wallP95Ms"),
+    submitMeanMs: lowerIsBetter("submitMeanMs"),
+    submitP95Ms: lowerIsBetter("submitP95Ms"),
+    drainMeanMs: lowerIsBetter("drainMeanMs"),
+    drainP95Ms: lowerIsBetter("drainP95Ms"),
     taskDurationMs: lowerIsBetter("taskDurationMs"),
     scriptDurationMs: lowerIsBetter("scriptDurationMs"),
   };
@@ -156,6 +163,7 @@ async function captureSnapshot(chrome, baseUrl, snapshot, destination) {
     scenario: snapshot.scenario,
     theme: snapshot.theme,
     mode: "snapshot",
+    variant: "full",
     time: String(snapshot.time),
   });
   const page = await openPage(
@@ -190,13 +198,19 @@ function formatNumber(value, digits = 2) {
   return Number.isFinite(value) ? value.toFixed(digits) : "n/a";
 }
 
+function formatChange(value) {
+  return Number.isFinite(value)
+    ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`
+    : "n/a";
+}
+
 function markdownSummary(results) {
   const lines = [
     "# Lumathread renderer benchmark",
     "",
     `Reference: \`${results.reference}\``,
     "",
-    "Measurements are medians across repeated A/B runs in the same headless Chromium process using ANGLE/SwiftShader. Lower CPU/GPU/frame values are better; FPS is capped by RAF when the renderer stays below budget.",
+    "Measurements are medians of fixed, synchronously stepped frames. Each frame is followed by `gl.finish()` so wall time includes all queued rendering work under the same Chromium/ANGLE/SwiftShader environment. Absolute software-renderer timings are not representative of a discrete GPU; A/B changes are.",
     "",
     "| Scenario | Metric | Baseline | Candidate | Change |",
     "|---|---:|---:|---:|---:|",
@@ -204,30 +218,54 @@ function markdownSummary(results) {
   for (const scenario of results.scenarios) {
     const comparison = scenario.comparison;
     const rows = [
-      ["FPS", comparison.fps, false],
-      ["Frame p95 (ms)", comparison.frameP95Ms, true],
-      ["CPU mean (ms)", comparison.cpuMeanMs, true],
-      ["CPU p95 (ms)", comparison.cpuP95Ms, true],
-      ["GPU mean (ms)", comparison.gpuMeanMs, true],
-      ["GPU p95 (ms)", comparison.gpuP95Ms, true],
-      ["Task duration (ms)", comparison.taskDurationMs, true],
+      ["FPS equivalent", comparison.fps],
+      ["Wall mean (ms)", comparison.wallMeanMs],
+      ["Wall p95 (ms)", comparison.wallP95Ms],
+      ["Submit mean (ms)", comparison.submitMeanMs],
+      ["GPU drain mean (ms)", comparison.drainMeanMs],
+      ["Task duration (ms)", comparison.taskDurationMs],
     ];
-    for (const [label, value, lowerIsBetter] of rows) {
-      const rawChange = value.changePercent;
-      const displayed = Number.isFinite(rawChange)
-        ? `${rawChange >= 0 ? "+" : ""}${rawChange.toFixed(1)}%${lowerIsBetter ? "" : ""}`
-        : "n/a";
+    for (const [label, value] of rows) {
       lines.push(
-        `| ${scenario.name} | ${label} | ${formatNumber(value.baseline)} | ${formatNumber(value.candidate)} | ${displayed} |`,
+        `| ${scenario.name} | ${label} | ${formatNumber(value.baseline)} | ${formatNumber(value.candidate)} | ${formatChange(value.changePercent)} |`,
       );
     }
   }
+
+  if (results.profiles?.length) {
+    lines.push(
+      "",
+      "## Pipeline attribution",
+      "",
+      "The ablations are diagnostic only: `no-glass` keeps the filament and dots, `path-only` also removes dots, and `no-twinkle` keeps glass but disables its sparkle field.",
+      "",
+      "| Surface | Variant | Baseline wall (ms) | Candidate wall (ms) | Baseline vs full | Candidate vs full |",
+      "|---|---:|---:|---:|---:|---:|",
+    );
+    for (const profile of results.profiles) {
+      const baselineFull = profile.variants.find(
+        (entry) => entry.variant === "full",
+      )?.baseline.wallMeanMs.median;
+      const candidateFull = profile.variants.find(
+        (entry) => entry.variant === "full",
+      )?.candidate.wallMeanMs.median;
+      for (const entry of profile.variants) {
+        const baselineValue = entry.baseline.wallMeanMs.median;
+        const candidateValue = entry.candidate.wallMeanMs.median;
+        lines.push(
+          `| ${profile.name} | ${entry.variant} | ${formatNumber(baselineValue)} | ${formatNumber(candidateValue)} | ${formatChange(percentChange(baselineFull, baselineValue))} | ${formatChange(percentChange(candidateFull, candidateValue))} |`,
+        );
+      }
+    }
+  }
+
   lines.push("", "## Renderer and environment", "");
   const first = results.scenarios[0]?.candidate;
   lines.push(
     `- Renderer status: \`${JSON.stringify(first?.renderer ?? null)}\``,
     `- WebGL: \`${JSON.stringify(first?.webgl ?? null)}\``,
-    `- Repeats: ${results.options.repeats}; warmup: ${results.options.warmupMs} ms; measured window: ${results.options.durationMs} ms.`,
+    `- Main runs: ${results.options.repeats} A/B repeats × ${results.options.frames} measured frames after ${results.options.warmupFrames} warmup frame(s).`,
+    `- Attribution runs: ${results.options.profileFrames} measured frame(s) per variant.`,
   );
   return `${lines.join("\n")}\n`;
 }
