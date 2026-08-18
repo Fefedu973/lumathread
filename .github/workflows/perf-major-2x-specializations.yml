@@ -1,19 +1,19 @@
-name: Major 2x renderer specializations
+name: Major 2x renderer with static optical cache
 
 on:
   push:
     branches:
-      - perf/major-2x-specializations
+      - perf/major-2x-optical-cache
   pull_request:
     branches:
-      - perf/visual-parity-renderer-optimization
+      - perf/major-2x-specializations
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: major-2x-renderer-${{ github.event.pull_request.number || github.ref }}
+  group: major-2x-optical-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Check out specialized candidate
+      - name: Check out optical-cache candidate
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -40,7 +40,7 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Apply major specialized renderer candidate
+      - name: Apply major renderer and optical-cache candidates
         run: |
           cat perf/experiments/major-2x-specializations.patch.gz.b64.* \
             | tr -d "\n" \
@@ -60,6 +60,12 @@ jobs:
               raise SystemExit(f"expected exactly 2 helper occurrences, found {count}")
           path.write_text(source.replace(old, new), encoding="utf-8")
           PY
+          base64 --decode \
+            perf/experiments/optical-field-cache.patch.gz.b64 \
+            | gzip --decompress \
+            > /tmp/optical-field-cache.patch
+          git apply --whitespace=nowarn \
+            /tmp/optical-field-cache.patch
 
       - name: Format and validate specialized renderer
         run: |
@@ -185,7 +191,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: major-2x-specializations-${{ github.sha }}
+          name: major-2x-optical-cache-${{ github.sha }}
           path: |
             perf-results
             src
