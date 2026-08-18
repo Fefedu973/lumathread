@@ -1,16 +1,14 @@
 name: Path source quadrature experiment
 
 on:
-  push:
-    branches:
-      - perf/path-source-quadrature-experiment
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: path-source-quadrature-${{ github.ref }}
+  group: path-source-quadrature-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -182,5 +180,3 @@ jobs:
       - name: Enforce visual parity gate
         if: always() && steps.visual.outcome == 'failure'
         run: exit 1
-
-# The workflow is intentionally isolated from the production optimization PR.
