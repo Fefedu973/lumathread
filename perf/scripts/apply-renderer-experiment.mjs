@@ -35,7 +35,8 @@ await import(
 
 const restore = async (path) => {
   const source = originals.get(path);
-  if (source === undefined) throw new Error(`Missing source snapshot for ${path}`);
+  if (source === undefined)
+    throw new Error(`Missing source snapshot for ${path}`);
   await writeFile(path, source);
 };
 
