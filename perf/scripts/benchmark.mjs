@@ -52,6 +52,21 @@ async function main() {
       viewport: { width: 412, height: 915, dpr: 2, mobile: true },
     },
   ];
+  const profileSurfaces = [
+    {
+      name: "hero-dark-desktop",
+      scenario: "hero",
+      theme: "dark",
+      viewport: { width: 1600, height: 900, dpr: 1, mobile: false },
+    },
+    {
+      name: "cta-dark-desktop",
+      scenario: "cta",
+      theme: "dark",
+      viewport: { width: 1600, height: 900, dpr: 1, mobile: false },
+    },
+  ];
+  const profileVariants = ["full", "no-glass", "path-only", "no-twinkle"];
   const snapshots = [
     {
       name: "hero-dark-desktop-t0_35",
@@ -104,6 +119,7 @@ async function main() {
       reference: "7f4289aa3ff640f479701ceec0b0d790af037692",
       options,
       scenarios: [],
+      profiles: [],
       snapshots: [],
     };
     for (const scenario of scenarios) {
@@ -135,6 +151,46 @@ async function main() {
         candidate,
         comparison: compareAggregates(baseline, candidate),
       });
+      await writeFile(
+        path.join(options.out, "benchmark-progress.json"),
+        JSON.stringify(result, null, 2),
+      );
+    }
+
+    for (const surface of profileSurfaces) {
+      console.log(`Profiling ${surface.name} pipeline...`);
+      const profile = { ...surface, variants: [] };
+      for (let index = 0; index < profileVariants.length; index += 1) {
+        const profileVariant = profileVariants[index];
+        const scenario = { ...surface, variant: profileVariant };
+        const order =
+          index % 2 === 0
+            ? ["baseline", "candidate"]
+            : ["candidate", "baseline"];
+        const raw = { baseline: [], candidate: [] };
+        for (const build of order) {
+          console.log(`  ${profileVariant}: ${build}`);
+          raw[build].push(
+            await runSingleBenchmark(
+              chrome,
+              build === "baseline" ? options.baseline : options.candidate,
+              scenario,
+              options,
+              options.profileFrames,
+            ),
+          );
+        }
+        const baseline = aggregateRuns(raw.baseline);
+        const candidate = aggregateRuns(raw.candidate);
+        profile.variants.push({
+          variant: profileVariant,
+          raw,
+          baseline,
+          candidate,
+          comparison: compareAggregates(baseline, candidate),
+        });
+      }
+      result.profiles.push(profile);
       await writeFile(
         path.join(options.out, "benchmark-progress.json"),
         JSON.stringify(result, null, 2),
