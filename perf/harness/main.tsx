@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   getHeroTrajectoryVerticalScale,
@@ -85,8 +86,7 @@ function createHeroOrbitTrajectory(
     }
     return centerX + ((value - 0.5) / 0.26) * radiusX;
   };
-  const mapY = (value: number) =>
-    centerY - ((value - 0.02) / 0.98) * radiusY;
+  const mapY = (value: number) => centerY - ((value - 0.02) / 0.98) * radiusY;
 
   const bandHeight = 1 - HERO_WAVE_Y;
   const verticalScale = getHeroTrajectoryVerticalScale(
@@ -229,10 +229,13 @@ function useHarnessCallbacks(
   return {
     rendererAvailable,
     onReady: () => {
-      window.setTimeout(() => {
-        runtime.ready = true;
-        document.documentElement.dataset.harnessReady = "true";
-      }, mode === "snapshot" ? 350 : 100);
+      window.setTimeout(
+        () => {
+          runtime.ready = true;
+          document.documentElement.dataset.harnessReady = "true";
+        },
+        mode === "snapshot" ? 350 : 100,
+      );
     },
     onRendererStatus: (status: HeroWaveRendererStatus) => {
       runtime.rendererStatus = status;
