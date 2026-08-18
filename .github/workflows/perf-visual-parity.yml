@@ -33,7 +33,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Apply measured glass renderer experiment
-        run: node perf/scripts/apply-renderer-optimization.mjs
+        run: |
+          node perf/scripts/apply-renderer-optimization.mjs
+          bunx biome format --write \
+            src/rendering/glass-mask.ts \
+            src/runtime/glass-terrain-renderer.ts
 
       - name: Validate candidate and harness types
         run: |
