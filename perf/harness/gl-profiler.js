@@ -170,7 +170,10 @@
       let writeIndex = 0;
       for (const token of state.pending) {
         if (
-          !context.getQueryParameter(token.query, context.QUERY_RESULT_AVAILABLE)
+          !context.getQueryParameter(
+            token.query,
+            context.QUERY_RESULT_AVAILABLE,
+          )
         ) {
           state.pending[writeIndex++] = token;
           continue;
@@ -211,19 +214,15 @@
       shaders.push(shader);
       programShaders.set(program, shaders);
     });
-    wrap(
-      "linkProgram",
-      undefined,
-      ([program]) => {
-        if (!program) return;
-        for (const shader of programShaders.get(program) ?? []) {
-          const stage = shaderStages.get(shader);
-          if (!stage) continue;
-          programStages.set(program, stage);
-          break;
-        }
-      },
-    );
+    wrap("linkProgram", undefined, ([program]) => {
+      if (!program) return;
+      for (const shader of programShaders.get(program) ?? []) {
+        const stage = shaderStages.get(shader);
+        if (!stage) continue;
+        programStages.set(program, stage);
+        break;
+      }
+    });
     wrap("useProgram", ([program]) => {
       state.currentProgram = program ?? null;
     });
@@ -251,9 +250,7 @@
         collect();
         return {
           supported: Boolean(extension),
-          extension: extension
-            ? "EXT_disjoint_timer_query_webgl2"
-            : null,
+          extension: extension ? "EXT_disjoint_timer_query_webgl2" : null,
           frameCount: state.frame,
           pendingCount: state.pending.length,
           sampleCount: state.samples.length,
@@ -313,7 +310,9 @@
       for (const context of contexts) {
         context.__lumathreadGpuProfiler?.collect();
       }
-      return contexts[0]?.__lumathreadGpuProfiler?.snapshot() ?? emptySnapshot();
+      return (
+        contexts[0]?.__lumathreadGpuProfiler?.snapshot() ?? emptySnapshot()
+      );
     },
   };
   const glStats = window.__LUMATHREAD_GL_STATS__;
