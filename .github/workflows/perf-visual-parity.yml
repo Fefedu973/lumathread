@@ -88,15 +88,16 @@ jobs:
             curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
           done
 
-      - name: Run repeated A/B renderer benchmarks and captures
+      - name: Run fixed-frame A/B renderer benchmarks and captures
         run: |
           bun perf/scripts/benchmark.mjs \
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --repeats 3 \
-            --warmup 2500 \
-            --duration 5500
+            --frames 3 \
+            --warmup-frames 1 \
+            --profile-frames 2
 
       - name: Compare deterministic screenshots
         id: visual
