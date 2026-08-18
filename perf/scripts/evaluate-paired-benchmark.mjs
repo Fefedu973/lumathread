@@ -7,22 +7,16 @@ const readArg = (name, fallback) => {
   return index >= 0 ? args[index + 1] : fallback;
 };
 
-const inputPath = resolve(
-  readArg("--input", "perf-results/benchmark.json"),
-);
+const inputPath = resolve(readArg("--input", "perf-results/benchmark.json"));
 const outputPath = resolve(
   readArg("--output", "perf-results/paired-evaluation.json"),
 );
 const markdownPath = resolve(
   readArg("--markdown", "perf-results/paired-evaluation.md"),
 );
-const minimumImprovement = Number(
-  readArg("--minimum-improvement", "0.02"),
-);
+const minimumImprovement = Number(readArg("--minimum-improvement", "0.02"));
 const maximumRegression = Number(readArg("--maximum-regression", "0.02"));
-const minimumScenarioCount = Number(
-  readArg("--minimum-scenarios", "4"),
-);
+const minimumScenarioCount = Number(readArg("--minimum-scenarios", "4"));
 
 const report = JSON.parse(await readFile(inputPath, "utf8"));
 const records = [];
@@ -61,7 +55,9 @@ const addRecord = (path, object, ratio, source) => {
 
 const walk = (value, path = "root") => {
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => walk(entry, `${path}[${index}]`));
+    value.forEach((entry, index) => {
+      walk(entry, `${path}[${index}]`);
+    });
     return;
   }
   if (!value || typeof value !== "object") return;
@@ -92,12 +88,7 @@ const walk = (value, path = "root") => {
       candidateDirect !== null &&
       baselineDirect > 0
     ) {
-      addRecord(
-        path,
-        value,
-        candidateDirect / baselineDirect,
-        "direct-times",
-      );
+      addRecord(path, value, candidateDirect / baselineDirect, "direct-times");
     } else if (value.baseline && value.candidate) {
       const timeKeys = [
         "medianWallMs",
@@ -136,7 +127,8 @@ const scenarioLike = records.filter((record) =>
     `${record.label} ${record.path}`,
   ),
 );
-const selected = scenarioLike.length >= minimumScenarioCount ? scenarioLike : records;
+const selected =
+  scenarioLike.length >= minimumScenarioCount ? scenarioLike : records;
 
 if (selected.length < minimumScenarioCount) {
   throw new Error(
@@ -154,8 +146,7 @@ const bestRatio = Math.min(...selected.map((record) => record.ratio));
 const improvement = 1 - geometricRatio;
 const worstRegression = Math.max(0, worstRatio - 1);
 const accepted =
-  improvement >= minimumImprovement &&
-  worstRegression <= maximumRegression;
+  improvement >= minimumImprovement && worstRegression <= maximumRegression;
 
 const evaluation = {
   accepted,
@@ -169,7 +160,9 @@ const evaluation = {
   worstRatio,
   worstRegression,
   bestRatio,
-  scenarios: selected.sort((left, right) => left.label.localeCompare(right.label)),
+  scenarios: selected.sort((left, right) =>
+    left.label.localeCompare(right.label),
+  ),
 };
 
 await writeFile(outputPath, `${JSON.stringify(evaluation, null, 2)}\n`);
