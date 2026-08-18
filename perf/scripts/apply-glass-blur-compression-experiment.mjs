@@ -84,7 +84,7 @@ const after = `    const originalIterations =
         0,
         step / resources.blurHeight,
       );
-      source = resources.blurTexures[1];
+      source = resources.blurTextures[1];
     }
     return resources.blurTextures[1];`;
 const first = source.indexOf(before);
