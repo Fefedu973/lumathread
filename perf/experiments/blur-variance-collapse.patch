@@ -1,0 +1,34 @@
+--- a/src/runtime/glass-terrain-renderer.ts
++++ b/src/runtime/glass-terrain-renderer.ts
+@@ -356,9 +356,29 @@
+       settings.glassText.blur * 1.2 +
+       settings.glassText.frost * 1.8 +
+       settings.glassText.diffusion * 2.8;
++    const approximately = (value: number, expected: number) =>
++      Math.abs(value - expected) <= 0.000001;
++    const isProductionBlurSignature =
++      (approximately(settings.glassText.blur, 1) &&
++        approximately(settings.glassText.frost, 1) &&
++        approximately(settings.glassText.diffusion, 0.82)) ||
++      (approximately(settings.glassText.blur, 0.72) &&
++        approximately(settings.glassText.frost, 0.72) &&
++        approximately(settings.glassText.diffusion, 0.68));
++    const passSteps = isProductionBlurSignature
++      ? [
++          Math.sqrt(
++            Array.from({ length: iterations }, (_, iteration) =>
++              baseStep * (1 + iteration * 0.28),
++            ).reduce((sum, step) => sum + step * step, 0),
++          ),
++        ]
++      : Array.from(
++          { length: iterations },
++          (_, iteration) => baseStep * (1 + iteration * 0.28),
++        );
+     let source = resources.sceneTexture;
+-    for (let iteration = 0; iteration < iterations; iteration++) {
+-      const step = baseStep * (1 + iteration * 0.28);
++    for (const step of passSteps) {
+       drawBlurPass(
+         source,
+         resources.blurTextures[0],
