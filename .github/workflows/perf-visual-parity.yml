@@ -35,11 +35,13 @@ jobs:
       fail-fast: false
       matrix:
         experiment:
-          - viewport
-          - specialized
-          - specialized-viewport
-          - direct-viewport
-          - direct-specialized-viewport
+          - twinkle
+          - uniform-cache
+          - path-core-output
+          - twinkle-uniform-cache
+          - twinkle-path-core-output
+          - blur-minus-one
+          - blur-half
     steps:
       - name: Check out candidate
         uses: actions/checkout@v4
@@ -129,10 +131,11 @@ jobs:
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
-            --repeats 3 \
-            --frames 8 \
-            --warmup-frames 2 \
-            --profile-frames 4
+            --focus cta \
+            --repeats 4 \
+            --frames 12 \
+            --warmup-frames 3 \
+            --profile-frames 6
 
       - name: Compare deterministic screenshots
         id: visual
