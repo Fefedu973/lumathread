@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - perf/major-2x-specializations
+  pull_request:
+    branches:
+      - perf/visual-parity-renderer-optimization
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: major-2x-renderer-${{ github.ref }}
+  group: major-2x-renderer-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
