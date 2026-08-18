@@ -61,7 +61,9 @@ const visit = (node) => {
       }
       bodies.set(body.pos, body);
 
-      const args = node.arguments.map((argument) => argument.getText(sourceFile));
+      const args = node.arguments.map((argument) =>
+        argument.getText(sourceFile),
+      );
       let replacement;
       if (
         method === "bindBuffer" &&
