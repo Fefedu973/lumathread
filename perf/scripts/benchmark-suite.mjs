@@ -160,11 +160,7 @@ async function runPairedBenchmark(
       const frameOrder = frame % 2 === 0 ? initialOrder : reverseOrder;
       const phase = 0.35 + frame * 0.61;
       for (const build of frameOrder) {
-        await dispatchPointer(
-          pages[build].client,
-          scenario.scenario,
-          phase,
-        );
+        await dispatchPointer(pages[build].client, scenario.scenario, phase);
         samples[build].push(await stepFrame(pages[build].client));
       }
     }
