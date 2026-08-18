@@ -35,10 +35,11 @@ jobs:
       fail-fast: false
       matrix:
         experiment:
-          - shader
-          - scissor
-          - blit
-          - combined
+          - viewport
+          - specialized
+          - specialized-viewport
+          - direct-viewport
+          - direct-specialized-viewport
     steps:
       - name: Check out candidate
         uses: actions/checkout@v4
@@ -129,9 +130,9 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --repeats 3 \
-            --frames 3 \
-            --warmup-frames 1 \
-            --profile-frames 2
+            --frames 8 \
+            --warmup-frames 2 \
+            --profile-frames 4
 
       - name: Compare deterministic screenshots
         id: visual
