@@ -58,7 +58,7 @@ def compare_image(
     changed_0 = float(np.mean(per_pixel_max > 0))
     changed_2 = float(np.mean(per_pixel_max > 2))
     changed_8 = float(np.mean(per_pixel_max > 8))
-    psnr = float("inf") if mse == 0 else 10.0 * math.log10(1.0 / mse)
+    psnr = None if mse == 0 else 10.0 * math.log10(1.0 / mse)
 
     baseline_rgb = np.asarray(baseline_image.convert("RGB"), dtype=np.uint8)
     candidate_rgb = np.asarray(candidate_image.convert("RGB"), dtype=np.uint8)
