@@ -1,19 +1,19 @@
-name: Major 2x renderer with static optical cache
+name: Major 2x renderer with optical cache and blur variance
 
 on:
   push:
     branches:
-      - perf/major-2x-optical-cache
+      - perf/major-2x-optical-blur
   pull_request:
     branches:
-      - perf/major-2x-specializations
+      - perf/major-2x-optical-cache
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: major-2x-optical-${{ github.event.pull_request.number || github.ref }}
+  group: major-2x-optical-blur-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - name: Check out optical-cache candidate
+      - name: Check out combined candidate
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -40,7 +40,7 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Apply major renderer and optical-cache candidates
+      - name: Apply major, optical-cache and blur-variance candidates
         run: |
           cat perf/experiments/major-2x-specializations.patch.gz.b64.* \
             | tr -d "\n" \
@@ -66,6 +66,8 @@ jobs:
             > /tmp/optical-field-cache.patch
           git apply --whitespace=nowarn \
             /tmp/optical-field-cache.patch
+          git apply --whitespace=nowarn \
+            perf/experiments/blur-variance-collapse.patch
 
       - name: Format and validate specialized renderer
         run: |
@@ -191,7 +193,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: major-2x-optical-cache-${{ github.sha }}
+          name: major-2x-optical-blur-${{ github.sha }}
           path: |
             perf-results
             src
