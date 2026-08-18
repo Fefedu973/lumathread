@@ -129,10 +129,7 @@ function compareAggregates(baseline, candidate) {
   const lowerIsBetter = (key) => ({
     baseline: baseline[key].median,
     candidate: candidate[key].median,
-    changePercent: percentChange(
-      baseline[key].median,
-      candidate[key].median,
-    ),
+    changePercent: percentChange(baseline[key].median, candidate[key].median),
     improvementPercent:
       percentChange(baseline[key].median, candidate[key].median) === null
         ? null
@@ -142,10 +139,7 @@ function compareAggregates(baseline, candidate) {
     fps: {
       baseline: baseline.fps.median,
       candidate: candidate.fps.median,
-      changePercent: percentChange(
-        baseline.fps.median,
-        candidate.fps.median,
-      ),
+      changePercent: percentChange(baseline.fps.median, candidate.fps.median),
     },
     frameP95Ms: lowerIsBetter("frameP95Ms"),
     cpuMeanMs: lowerIsBetter("cpuMeanMs"),
@@ -171,10 +165,7 @@ async function captureSnapshot(chrome, baseUrl, snapshot, destination) {
   );
   try {
     await waitForHarness(page.client);
-    await evaluate(
-      page.client,
-      `document.fonts?.ready ?? Promise.resolve()`,
-    );
+    await evaluate(page.client, `document.fonts?.ready ?? Promise.resolve()`);
     await sleep(900);
     const result = await page.client.call("Page.captureScreenshot", {
       format: "png",
