@@ -9,8 +9,9 @@ function parseArguments(argv) {
     candidate: "http://127.0.0.1:4174",
     out: "perf-results",
     repeats: 3,
-    warmupMs: 2500,
-    durationMs: 5500,
+    frames: 3,
+    warmupFrames: 1,
+    profileFrames: 2,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const key = argv[index];
@@ -21,8 +22,9 @@ function parseArguments(argv) {
     else if (key === "--candidate") result.candidate = value;
     else if (key === "--out") result.out = value;
     else if (key === "--repeats") result.repeats = Number(value);
-    else if (key === "--warmup") result.warmupMs = Number(value);
-    else if (key === "--duration") result.durationMs = Number(value);
+    else if (key === "--frames") result.frames = Number(value);
+    else if (key === "--warmup-frames") result.warmupFrames = Number(value);
+    else if (key === "--profile-frames") result.profileFrames = Number(value);
   }
   return result;
 }
@@ -189,7 +191,9 @@ async function startChrome() {
     `lumathread-chrome-${process.pid}-${Date.now()}`,
   );
   const args = [
-    "--headless=new",
+    ...(process.env.LUMATHREAD_CHROME_HEADFUL === "1"
+      ? []
+      : ["--headless=new"]),
     "--no-sandbox",
     "--disable-dev-shm-usage",
     "--no-first-run",
@@ -323,47 +327,53 @@ async function waitForHarness(client) {
   throw new Error("Harness did not become ready with the HDR renderer.");
 }
 
-async function startPointerMotion(client, scenario) {
+async function dispatchPointer(client, scenario, phase) {
   await evaluate(
     client,
     `(() => {
-      clearInterval(window.__LUMATHREAD_POINTER_TIMER__);
-      const started = performance.now();
       const canvas = document.querySelector("canvas");
       const target = document.getElementById("harness-stage") || document.body;
-      const dispatch = () => {
-        const elapsed = (performance.now() - started) / 1000;
-        const rect = target.getBoundingClientRect();
-        const radiusX = rect.width * ${scenario === "cta" ? "0.34" : "0.28"};
-        const radiusY = rect.height * ${scenario === "cta" ? "0.18" : "0.24"};
-        const x = rect.left + rect.width * 0.5 + Math.sin(elapsed * 1.71) * radiusX;
-        const y = rect.top + rect.height * 0.48 + Math.cos(elapsed * 1.23) * radiusY;
-        const init = {
-          clientX: x,
-          clientY: y,
-          pointerId: 1,
-          pointerType: "mouse",
-          isPrimary: true,
-          bubbles: true,
-          composed: true,
-        };
-        const event = new PointerEvent("pointermove", init);
-        canvas?.dispatchEvent(event);
-        target.dispatchEvent(new PointerEvent("pointermove", init));
-        window.dispatchEvent(new PointerEvent("pointermove", init));
+      const rect = target.getBoundingClientRect();
+      const radiusX = rect.width * ${scenario === "cta" ? "0.34" : "0.28"};
+      const radiusY = rect.height * ${scenario === "cta" ? "0.18" : "0.24"};
+      const x = rect.left + rect.width * 0.5 + Math.sin(${phase} * 1.71) * radiusX;
+      const y = rect.top + rect.height * 0.48 + Math.cos(${phase} * 1.23) * radiusY;
+      const init = {
+        clientX: x,
+        clientY: y,
+        pointerId: 1,
+        pointerType: "mouse",
+        isPrimary: true,
+        bubbles: true,
+        composed: true,
       };
-      dispatch();
-      window.__LUMATHREAD_POINTER_TIMER__ = setInterval(dispatch, 33);
+      canvas?.dispatchEvent(new PointerEvent("pointermove", init));
+      target.dispatchEvent(new PointerEvent("pointermove", init));
+      window.dispatchEvent(new PointerEvent("pointermove", init));
     })()`,
   );
 }
 
-async function stopPointerMotion(client) {
-  await evaluate(
+async function stepFrame(client, seconds = 1 / 60) {
+  return evaluate(
     client,
     `(() => {
-      clearInterval(window.__LUMATHREAD_POINTER_TIMER__);
-      window.__LUMATHREAD_POINTER_TIMER__ = 0;
+      const canvas = document.querySelector("canvas");
+      const debug = canvas?.__waveDebug;
+      const context = window.__LUMATHREAD_GL_CONTEXTS__?.[0];
+      if (!debug || !context) {
+        throw new Error("Synchronous renderer debug hooks are unavailable.");
+      }
+      const startedAt = performance.now();
+      debug.step(${seconds});
+      const submittedAt = performance.now();
+      context.finish();
+      const finishedAt = performance.now();
+      return {
+        submitMs: submittedAt - startedAt,
+        drainMs: finishedAt - submittedAt,
+        wallMs: finishedAt - startedAt,
+      };
     })()`,
   );
 }
@@ -381,72 +391,54 @@ function metricDelta(before, after, name) {
   return second - first;
 }
 
-function summarizeRun(payload, metricsBefore, metricsAfter) {
-  const frameDeltas = finiteValues(payload.runtime.frameDeltasMs).filter(
-    (value) => value > 0 && value < 250,
-  );
-  const cpu = finiteValues(
-    payload.runtime.samples.map((sample) => sample.cpuMs),
-  );
-  const gpu = finiteValues(
-    payload.runtime.samples.map((sample) => sample.gpuMs),
-  );
-  const elapsedMs =
-    payload.runtime.firstFrameAt !== null &&
-    payload.runtime.lastFrameAt !== null
-      ? payload.runtime.lastFrameAt - payload.runtime.firstFrameAt
-      : 0;
-  const renderedFrames = payload.runtime.renderedFrames;
+function summarizeRun(payload, metricsBefore, metricsAfter, stepSamples) {
+  const wall = finiteValues(stepSamples.map((sample) => sample.wallMs));
+  const submit = finiteValues(stepSamples.map((sample) => sample.submitMs));
+  const drain = finiteValues(stepSamples.map((sample) => sample.drainMs));
+  const renderedFrames = wall.length;
+  const wallMean = mean(wall);
+  const browserMilliseconds = (name) => {
+    const delta = metricDelta(metricsBefore, metricsAfter, name);
+    return delta === null ? null : delta * 1000;
+  };
+  const glPerFrame = {};
+  for (const [name, value] of Object.entries(payload.gl?.counters ?? {})) {
+    glPerFrame[name] = renderedFrames > 0 ? value / renderedFrames : null;
+  }
   return {
     renderedFrames,
-    elapsedMs,
-    fps:
-      elapsedMs > 0 && renderedFrames > 1
-        ? ((renderedFrames - 1) * 1000) / elapsedMs
-        : null,
-    frameMs: {
-      mean: mean(frameDeltas),
-      p50: percentile(frameDeltas, 0.5),
-      p95: percentile(frameDeltas, 0.95),
-      p99: percentile(frameDeltas, 0.99),
-      dropped20msRatio:
-        frameDeltas.length > 0
-          ? frameDeltas.filter((value) => value > 20).length /
-            frameDeltas.length
-          : null,
-      dropped33msRatio:
-        frameDeltas.length > 0
-          ? frameDeltas.filter((value) => value > 33.34).length /
-            frameDeltas.length
-          : null,
+    fps: wallMean && wallMean > 0 ? 1000 / wallMean : null,
+    wallMs: {
+      mean: wallMean,
+      p50: percentile(wall, 0.5),
+      p95: percentile(wall, 0.95),
+      p99: percentile(wall, 0.99),
     },
-    cpuMs: {
-      sampleCount: cpu.length,
-      mean: mean(cpu),
-      p50: percentile(cpu, 0.5),
-      p95: percentile(cpu, 0.95),
+    submitMs: {
+      mean: mean(submit),
+      p50: percentile(submit, 0.5),
+      p95: percentile(submit, 0.95),
+      p99: percentile(submit, 0.99),
     },
-    gpuMs: {
-      sampleCount: gpu.length,
-      mean: mean(gpu),
-      p50: percentile(gpu, 0.5),
-      p95: percentile(gpu, 0.95),
+    drainMs: {
+      mean: mean(drain),
+      p50: percentile(drain, 0.5),
+      p95: percentile(drain, 0.95),
+      p99: percentile(drain, 0.99),
     },
     browser: {
-      taskDurationMs:
-        metricDelta(metricsBefore, metricsAfter, "TaskDuration") * 1000,
-      scriptDurationMs:
-        metricDelta(metricsBefore, metricsAfter, "ScriptDuration") * 1000,
-      layoutDurationMs:
-        metricDelta(metricsBefore, metricsAfter, "LayoutDuration") * 1000,
-      recalcStyleDurationMs:
-        metricDelta(metricsBefore, metricsAfter, "RecalcStyleDuration") * 1000,
+      taskDurationMs: browserMilliseconds("TaskDuration"),
+      scriptDurationMs: browserMilliseconds("ScriptDuration"),
+      layoutDurationMs: browserMilliseconds("LayoutDuration"),
+      recalcStyleDurationMs: browserMilliseconds("RecalcStyleDuration"),
       jsHeapUsedBytes: metricsAfter.JSHeapUsedSize ?? null,
     },
     gl: payload.gl,
+    glPerFrame,
     renderer: payload.runtime.rendererStatus,
     rendererErrors: payload.runtime.rendererErrors,
     webgl: payload.webgl,
+    samples: stepSamples,
   };
 }
 
@@ -461,8 +453,8 @@ export {
   openPage,
   evaluate,
   waitForHarness,
-  startPointerMotion,
-  stopPointerMotion,
+  dispatchPointer,
+  stepFrame,
   metricsToObject,
   summarizeRun,
 };
