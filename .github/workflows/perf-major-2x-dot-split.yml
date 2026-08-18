@@ -73,6 +73,7 @@ jobs:
             src/rendering/shaders.ts \
             src/rendering/webgl-resources.ts \
             src/runtime/resource-manager.ts \
+            src/runtime/glass-terrain-renderer.ts \
             src/runtime/path-renderer.ts \
             src/runtime/draw-common.ts \
             perf/harness/gl-profiler.js \
