@@ -36,11 +36,9 @@ jobs:
       matrix:
         experiment:
           - noop
-          - twinkle-path-core-output
           - specialized-viewport
-          - blur-3-specialized-viewport
-          - blur-2-specialized-viewport
-          - blur-1-specialized-viewport
+          - persistent-framebuffers
+          - persistent-framebuffers-specialized-viewport
     steps:
       - name: Check out candidate
         uses: actions/checkout@v4
@@ -58,11 +56,34 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Apply isolated renderer experiment
+      - name: Apply paired protocol and isolated renderer experiment
+        shell: bash
         run: |
-          node perf/scripts/apply-renderer-experiment.mjs "${{ matrix.experiment }}"
+          cat perf/experiments/persistent-framebuffers-paired-benchmark.patch.b64.* \
+            | tr -d "\n" \
+            | base64 --decode \
+            > /tmp/persistent-framebuffers-paired-benchmark.patch
+          git apply --whitespace=nowarn \
+            /tmp/persistent-framebuffers-paired-benchmark.patch
+          experiment="${{ matrix.experiment }}"
+          case "$experiment" in
+            persistent-framebuffers)
+              node perf/scripts/apply-persistent-glass-framebuffers-experiment.mjs
+              ;;
+            persistent-framebuffers-specialized-viewport)
+              node perf/scripts/apply-persistent-glass-framebuffers-experiment.mjs
+              node perf/scripts/apply-renderer-experiment.mjs specialized-viewport
+              ;;
+            *)
+              node perf/scripts/apply-renderer-experiment.mjs "$experiment"
+              ;;
+          esac
           bunx biome format --write \
             perf/harness/gl-profiler.js \
+            perf/scripts/apply-renderer-experiment.mjs \
+            perf/scripts/apply-persistent-glass-framebuffers-experiment.mjs \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/benchmark-suite.mjs \
             src/rendering/shaders.ts \
             src/rendering/glass-mask.ts \
             src/rendering/webgl-resources.ts \
@@ -132,10 +153,10 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 3 \
-            --frames 24 \
-            --warmup-frames 12 \
-            --profile-frames 6
+            --repeats 5 \
+            --frames 36 \
+            --warmup-frames 20 \
+            --profile-frames 8
 
       - name: Compare deterministic screenshots
         id: visual
@@ -173,6 +194,9 @@ jobs:
           path: |
             perf-results
             perf/harness/gl-profiler.js
+            perf/scripts/apply-persistent-glass-framebuffers-experiment.mjs
+            perf/scripts/benchmark.mjs
+            perf/scripts/benchmark-suite.mjs
             src/rendering/shaders.ts
             src/rendering/glass-mask.ts
             src/rendering/webgl-resources.ts
