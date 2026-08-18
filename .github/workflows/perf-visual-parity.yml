@@ -12,6 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  source-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v4
+
+      - name: Upload candidate source tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-source-${{ github.event.pull_request.head.sha || github.sha }}
+          path: .
+          include-hidden-files: true
+          retention-days: 1
+
   benchmark:
     name: benchmark (${{ matrix.experiment }})
     runs-on: ubuntu-latest
