@@ -149,9 +149,7 @@ await replaceOnce(
     image.data[offset + 3] = 255;
   }
   context.putImageData(image, 0, 0);
-  return right > left && bottom > top
-    ? { left, top, right, bottom }
-    : null;
+  return right > left && bottom > top ? { left, top, right, bottom } : null;
 }`,
 );
 
