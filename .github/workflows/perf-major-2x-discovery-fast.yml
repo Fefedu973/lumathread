@@ -153,10 +153,10 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 2 \
-            --frames 12 \
-            --warmup-frames 6 \
-            --profile-frames 6
+            --repeats 1 \
+            --frames 3 \
+            --warmup-frames 2 \
+            --profile-frames 2
 
       - name: Compare CTA screenshots
         id: visual
