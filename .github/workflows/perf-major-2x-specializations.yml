@@ -27,12 +27,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
-      - name: Check out exact current renderer baseline
-        uses: actions/checkout@v4
-        with:
-          ref: b3c926b88b4861d851075015c141c67f225517fb
-          path: baseline
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -43,11 +37,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install candidate and baseline dependencies
-        run: |
-          bun install --frozen-lockfile
-          cd baseline
-          bun install --frozen-lockfile
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
 
       - name: Apply major specialized renderer candidate
         run: |
@@ -75,6 +66,16 @@ jobs:
           bun run check
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out exact current renderer baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install baseline dependencies
+        working-directory: baseline
+        run: bun install --frozen-lockfile
 
       - name: Inject identical measurement harness into baseline
         run: |
