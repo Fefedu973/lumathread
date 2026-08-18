@@ -1,9 +1,6 @@
 name: Renderer performance and visual parity
 
 on:
-  push:
-    branches:
-      - perf/visual-parity-renderer-optimization
   pull_request:
   workflow_dispatch:
 
@@ -11,7 +8,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: renderer-perf-${{ github.ref }}
+  group: renderer-perf-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -21,12 +18,6 @@ jobs:
     steps:
       - name: Check out candidate
         uses: actions/checkout@v4
-
-      - name: Check out frozen baseline
-        uses: actions/checkout@v4
-        with:
-          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
-          path: baseline
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -41,6 +32,18 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
+      - name: Validate candidate and harness types
+        run: |
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out frozen baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
       - name: Install baseline dependencies and inject the same harness
         run: |
           mkdir -p baseline/perf
@@ -50,12 +53,6 @@ jobs:
           cp tsconfig.perf.json baseline/tsconfig.perf.json
           cd baseline
           bun install --frozen-lockfile
-
-      - name: Validate candidate and harness types
-        run: |
-          bun run check
-          bun run build
-          bunx tsc -p tsconfig.perf.json --noEmit
 
       - name: Build baseline and candidate harnesses
         run: |
@@ -140,9 +137,14 @@ jobs:
       - name: Stop static servers
         if: always()
         run: |
-          kill "$(cat /tmp/lumathread-baseline-server.pid)" 2>/dev/null || true
-          kill "$(cat /tmp/lumathread-candidate-server.pid)" 2>/dev/null || true
+          for pidfile in \
+            /tmp/lumathread-baseline-server.pid \
+            /tmp/lumathread-candidate-server.pid; do
+            if [ -f "$pidfile" ]; then
+              kill "$(cat "$pidfile")" 2>/dev/null || true
+            fi
+          done
 
       - name: Enforce visual parity gate
-        if: always() && steps.visual.outcome != 'success'
+        if: always() && steps.visual.outcome == 'failure'
         run: exit 1
