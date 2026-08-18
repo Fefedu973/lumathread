@@ -148,6 +148,12 @@ const CTA_ACCENT_PROFILES = {
 type HarnessScenario = "hero" | "cta";
 type HarnessTheme = "dark" | "light";
 type HarnessMode = "benchmark" | "snapshot";
+type HarnessVariant =
+  | "full"
+  | "no-glass"
+  | "no-dots"
+  | "path-only"
+  | "no-twinkle";
 
 interface HarnessRuntime {
   ready: boolean;
@@ -161,6 +167,7 @@ interface HarnessRuntime {
   scenario: HarnessScenario;
   theme: HarnessTheme;
   mode: HarnessMode;
+  variant: HarnessVariant;
   pause: () => void;
   play: () => void;
   seek: (time: number) => void;
@@ -187,6 +194,16 @@ const theme: HarnessTheme = params.get("theme") === "light" ? "light" : "dark";
 const mode: HarnessMode =
   params.get("mode") === "snapshot" ? "snapshot" : "benchmark";
 const snapshotTime = Number.parseFloat(params.get("time") ?? "2.25");
+const requestedVariant = params.get("variant");
+const variant: HarnessVariant =
+  requestedVariant === "no-glass" ||
+  requestedVariant === "no-dots" ||
+  requestedVariant === "path-only" ||
+  requestedVariant === "no-twinkle"
+    ? requestedVariant
+    : "full";
+const glassEnabled = variant !== "no-glass" && variant !== "path-only";
+const dotsEnabled = variant !== "no-dots" && variant !== "path-only";
 
 const runtime: HarnessRuntime = {
   ready: false,
@@ -200,6 +217,7 @@ const runtime: HarnessRuntime = {
   scenario,
   theme,
   mode,
+  variant,
   pause: () => undefined,
   play: () => undefined,
   seek: () => undefined,
@@ -283,7 +301,8 @@ function sharedGlass(themeValue: HarnessTheme) {
     edgeStrength: themeValue === "light" ? 0.62 : 0.2,
     specular: themeValue === "light" ? 0.2 : 0.4,
     fresnel: themeValue === "light" ? 1.05 : 0.76,
-    twinkle: themeValue === "light" ? 0.56 : 0.82,
+    twinkle:
+      variant === "no-twinkle" ? 0 : themeValue === "light" ? 0.56 : 0.82,
     twinkleDensity: 0.24,
     twinkleSpeed: 0.72,
     tint: themeValue === "light" ? "#063b49" : "#dffcff",
@@ -349,7 +368,7 @@ function HeroScenario() {
         speed: 0.6,
       }}
       dots={{
-        enabled: true,
+        enabled: dotsEnabled,
         spacing: 28,
         opacity: 0.4,
         interaction: {
@@ -361,7 +380,7 @@ function HeroScenario() {
         },
       }}
       glassText={{
-        enabled: callbacks.rendererAvailable,
+        enabled: glassEnabled && callbacks.rendererAvailable,
         shape: "text",
         text: "Prove the strategy.",
         fontFamily: "Arial, Liberation Sans, sans-serif",
@@ -376,7 +395,7 @@ function HeroScenario() {
         ...finalGlass,
         twinkleSize: 36,
         intro:
-          mode === "snapshot"
+          mode === "snapshot" || mode === "benchmark"
             ? { delay: 0, duration: 0, blur: 0, offsetY: 0 }
             : {
                 delay: 80,
@@ -387,8 +406,8 @@ function HeroScenario() {
               },
       }}
       quality="auto"
-      fadeInDuration={mode === "snapshot" ? 0 : 1200}
-      paused={mode === "snapshot"}
+      fadeInDuration={mode === "snapshot" || mode === "benchmark" ? 0 : 1200}
+      paused={mode === "snapshot" || mode === "benchmark"}
       time={mode === "snapshot" ? snapshotTime : undefined}
       respectReducedMotion={false}
       pauseWhenOffscreen={false}
@@ -396,7 +415,7 @@ function HeroScenario() {
       onRendererStatus={callbacks.onRendererStatus}
       onRendererError={callbacks.onRendererError}
       onFrame={callbacks.onFrame}
-      onPerformance={callbacks.onPerformance}
+      onPerformance={mode === "snapshot" ? callbacks.onPerformance : undefined}
     />
   );
 }
@@ -459,7 +478,7 @@ function CtaScenario() {
         },
       }}
       glassText={{
-        enabled: true,
+        enabled: glassEnabled,
         shape: "text",
         text: "Your next strategy\ndeserves evidence.",
         fontFamily: "Arial, Liberation Sans, sans-serif",
@@ -475,12 +494,12 @@ function CtaScenario() {
         ...finalGlass,
         twinkleSize: 32,
         intro:
-          mode === "snapshot"
+          mode === "snapshot" || mode === "benchmark"
             ? { delay: 0, duration: 0, blur: 0, offsetY: 0 }
             : undefined,
       }}
       dots={{
-        enabled: true,
+        enabled: dotsEnabled,
         mode: "flat",
         spacing: 30,
         opacity: 0.3,
@@ -496,8 +515,8 @@ function CtaScenario() {
         },
       }}
       quality="high"
-      fadeInDuration={mode === "snapshot" ? 0 : 900}
-      paused={mode === "snapshot"}
+      fadeInDuration={mode === "snapshot" || mode === "benchmark" ? 0 : 900}
+      paused={mode === "snapshot" || mode === "benchmark"}
       time={mode === "snapshot" ? snapshotTime : undefined}
       respectReducedMotion={false}
       pauseWhenOffscreen={false}
@@ -505,7 +524,7 @@ function CtaScenario() {
       onRendererStatus={callbacks.onRendererStatus}
       onRendererError={callbacks.onRendererError}
       onFrame={callbacks.onFrame}
-      onPerformance={callbacks.onPerformance}
+      onPerformance={mode === "snapshot" ? callbacks.onPerformance : undefined}
     />
   );
 }
