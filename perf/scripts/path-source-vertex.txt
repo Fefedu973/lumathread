@@ -1,0 +1,280 @@
+export const PATH_INTEGRAL_VERTEX_SHADER = `#version 300 es
+precision highp float;
+
+in vec2 aCorner;
+in vec2 aSegmentStart;
+in vec2 aSegmentEnd;
+in vec2 aProgressRange;
+in vec2 aEndpointWeights;
+
+uniform vec2 uTargetResolution;
+uniform vec2 uCanvasResolution;
+uniform float uSupportRadiusPositivePx;
+uniform float uSupportRadiusNegativePx;
+uniform sampler2D uPalette;
+uniform sampler2D uProfiles;
+uniform mat3 uHueMatrix;
+uniform float uQuadraturePoints;
+uniform float uTime;
+uniform float uCurveTravel;
+uniform float uEnvelopeStationary;
+uniform float uStationaryCenter;
+uniform float uSegmentLength;
+uniform float uTailTaper;
+uniform float uHeadTaper;
+uniform float uPathClosed;
+uniform float uClosedLoopTaper;
+uniform float uBandSpread;
+uniform float uUpperGlowSpread;
+uniform float uLowerGlowSpread;
+uniform float uPaletteOffset;
+uniform float uPaletteWrap;
+uniform float uVelocityWidthScale;
+uniform float uVelocityGlowScale;
+uniform float uVelocityReflectionScale;
+uniform float uVisibility;
+
+const float PALETTE_TEXEL = ${(1 / HERO_PALETTE_TEXTURE_WIDTH).toFixed(10)};
+
+flat out vec4 vSourceFrame;
+flat out vec4 vShape;
+flat out vec4 vEnergy;
+flat out float vReflectionScale;
+flat out vec3 vWaveColor;
+flat out vec3 vPaleColor;
+flat out vec3 vCoreColor;
+flat out vec3 vReflectionColor;
+
+float segmentCenter(float time) {
+  float lengthValue = max(uSegmentLength, 0.05);
+  float outsidePadding = 0.06;
+  float firstCenter = -0.5 * lengthValue - outsidePadding;
+  float cycleLength = 1.0 + lengthValue + 2.0 * outsidePadding;
+  float centeredOffset = 0.5 - firstCenter;
+  float travelingCenter = firstCenter + mod(
+    time * uCurveTravel + centeredOffset,
+    cycleLength
+  );
+  return mix(
+    travelingCenter,
+    uStationaryCenter,
+    clamp(uEnvelopeStationary, 0.0, 1.0)
+  );
+}
+
+float segmentPositionForValue(float value, float time) {
+  float lengthValue = max(uSegmentLength, 0.05);
+  return (
+    value - (segmentCenter(time) - 0.5 * lengthValue)
+  ) / lengthValue;
+}
+
+float pathSegmentPosition(float progress, float time) {
+  if (uPathClosed < 0.5) {
+    return segmentPositionForValue(progress, time);
+  }
+  float lengthValue = min(max(uSegmentLength, 0.05), 0.98);
+  float travelingCenter = fract(time * uCurveTravel + 0.5);
+  float center = mix(
+    travelingCenter,
+    uStationaryCenter,
+    clamp(uEnvelopeStationary, 0.0, 1.0)
+  );
+  float delta = mod(progress - center + 0.5, 1.0) - 0.5;
+  return delta / lengthValue + 0.5;
+}
+
+float segmentEnvelope(float position) {
+  float tail = smoothstep(0.0, max(uTailTaper, 0.001), position);
+  float head = 1.0 - smoothstep(
+    1.0 - max(uHeadTaper, 0.001),
+    1.0,
+    position
+  );
+  return tail * head;
+}
+
+float mirrorCoordinate(float value) {
+  float wrapped = mod(value, 2.0);
+  if (wrapped < 0.0) wrapped += 2.0;
+  return wrapped <= 1.0 ? wrapped : 2.0 - wrapped;
+}
+
+float wrappedPaletteCoordinate(float value) {
+  if (uPaletteWrap > 1.5) return mirrorCoordinate(value);
+  if (uPaletteWrap > 0.5) return fract(value);
+  return clamp(value, 0.0, 1.0);
+}
+
+vec3 spatialPalette(float position) {
+  float wrapped = wrappedPaletteCoordinate(position - uPaletteOffset);
+  float palettePosition;
+  if (uPaletteWrap > 0.5 && uPaletteWrap < 1.5) {
+    palettePosition = mix(
+      0.5 + 0.5 * PALETTE_TEXEL,
+      1.0 - 0.5 * PALETTE_TEXEL,
+      wrapped
+    );
+  } else {
+    palettePosition = mix(
+      0.5 * PALETTE_TEXEL,
+      0.5 - 0.5 * PALETTE_TEXEL,
+      wrapped
+    );
+  }
+  return texture(uPalette, vec2(palettePosition, 0.5)).rgb;
+}
+
+void sampleProfiles(
+  float position,
+  out float widthScale,
+  out float opacityScale,
+  out float intensityScale,
+  out float glowScale,
+  out float upperGlowSpreadScale,
+  out float lowerGlowSpreadScale,
+  out float reflectionScale,
+  out float colorPositionOffset
+) {
+  float coordinate = clamp(position, 0.0, 1.0);
+  vec4 primary = texture(uProfiles, vec2(coordinate, 0.25));
+  vec4 secondary = texture(uProfiles, vec2(coordinate, 0.75));
+  widthScale = max(primary.r * 4.0 * uVelocityWidthScale, 0.0001);
+  opacityScale = primary.g * 4.0;
+  intensityScale = primary.b * 4.0;
+  glowScale = max(primary.a * 4.0 * uVelocityGlowScale, 0.0001);
+  upperGlowSpreadScale = max(secondary.b * 4.0, 0.0001);
+  lowerGlowSpreadScale = max(secondary.a * 4.0, 0.0001);
+  reflectionScale = secondary.r * 4.0 * uVelocityReflectionScale;
+  colorPositionOffset = secondary.g * 4.0 - 2.0;
+}
+
+void quadratureSource(out float sourceParameter, out float quadratureWeight) {
+  int count = uQuadraturePoints > 3.0 ? 4 : 2;
+  int index = gl_InstanceID % count;
+  if (count == 4) {
+    if (index == 0) {
+      sourceParameter = 0.0694318442;
+      quadratureWeight = 0.1739274226;
+    } else if (index == 1) {
+      sourceParameter = 0.3300094782;
+      quadratureWeight = 0.3260725774;
+    } else if (index == 2) {
+      sourceParameter = 0.6699905218;
+      quadratureWeight = 0.3260725774;
+    } else {
+      sourceParameter = 0.9305681558;
+      quadratureWeight = 0.1739274226;
+    }
+  } else if (index == 0) {
+    sourceParameter = 0.2113248654;
+    quadratureWeight = 0.5;
+  } else {
+    sourceParameter = 0.7886751346;
+    quadratureWeight = 0.5;
+  }
+}
+
+void main() {
+  float sourceParameter;
+  float quadratureWeight;
+  quadratureSource(sourceParameter, quadratureWeight);
+
+  float aspect = uCanvasResolution.x / max(uCanvasResolution.y, 1.0);
+  vec2 segmentStart = vec2(aSegmentStart.x * aspect, aSegmentStart.y);
+  vec2 segmentEnd = vec2(aSegmentEnd.x * aspect, aSegmentEnd.y);
+  vec2 segmentVector = segmentEnd - segmentStart;
+  float segmentLength = length(segmentVector);
+  vec2 tangent = segmentVector / max(segmentLength, 0.000001);
+  vec2 sourcePoint = segmentStart + segmentVector * sourceParameter;
+  float progress = mix(aProgressRange.x, aProgressRange.y, sourceParameter);
+  float endpointWeight = mix(
+    aEndpointWeights.x,
+    aEndpointWeights.y,
+    sourceParameter
+  );
+
+  float fullClosedLoop = step(0.5, uPathClosed)
+    * (1.0 - step(0.5, uClosedLoopTaper));
+  float position = mix(
+    pathSegmentPosition(progress, uTime),
+    progress,
+    fullClosedLoop
+  );
+  float widthScale;
+  float opacityScale;
+  float intensityScale;
+  float glowScale;
+  float upperGlowSpreadScale;
+  float lowerGlowSpreadScale;
+  float reflectionScale;
+  float colorPositionOffset;
+  sampleProfiles(
+    position,
+    widthScale,
+    opacityScale,
+    intensityScale,
+    glowScale,
+    upperGlowSpreadScale,
+    lowerGlowSpreadScale,
+    reflectionScale,
+    colorPositionOffset
+  );
+  float geometricAlpha = mix(
+    pow(segmentEnvelope(position), 0.55),
+    1.0,
+    fullClosedLoop
+  ) * endpointWeight;
+  float segmentAlpha = geometricAlpha * opacityScale * uVisibility;
+  float taperWidth = mix(0.025, 1.0, geometricAlpha) * widthScale;
+  float longitudinal = mix(
+    0.80,
+    1.0,
+    smoothstep(0.08, 0.88, clamp(position, 0.0, 1.0))
+  );
+  float arcWeight = segmentLength * quadratureWeight;
+  vec3 waveColor = spatialPalette(position + colorPositionOffset);
+  vec3 paleColor = mix(waveColor, vec3(0.90, 1.0, 0.98), 0.18);
+  vec3 coreColor = mix(paleColor, vec3(1.0), 0.05);
+
+  vSourceFrame = vec4(sourcePoint, tangent);
+  vShape = vec4(
+    taperWidth,
+    max(uBandSpread * glowScale, 0.001),
+    max(uLowerGlowSpread * lowerGlowSpreadScale, 0.05),
+    max(uUpperGlowSpread * upperGlowSpreadScale, 0.05)
+  );
+  vEnergy = vec4(intensityScale, longitudinal, segmentAlpha, arcWeight);
+  vReflectionScale = reflectionScale;
+  vWaveColor = waveColor;
+  vPaleColor = paleColor;
+  vCoreColor = coreColor;
+  vReflectionColor = mix(waveColor, paleColor, 0.28);
+
+  if (segmentLength <= 0.000001 || segmentAlpha <= 0.000001) {
+    gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+    return;
+  }
+
+  vec2 startPx = aSegmentStart * uTargetResolution;
+  vec2 endPx = aSegmentEnd * uTargetResolution;
+  vec2 directionPx = endPx - startPx;
+  vec2 tangentPx = directionPx / max(length(directionPx), 0.0001);
+  vec2 normalPx = vec2(-tangentPx.y, tangentPx.x);
+  vec2 sourcePx = mix(startPx, endPx, sourceParameter);
+  float positiveRadius = max(uSupportRadiusPositivePx, 1.0);
+  float negativeRadius = max(uSupportRadiusNegativePx, 1.0);
+  float alongRadius = max(positiveRadius, negativeRadius);
+  float acrossRadius = aCorner.y > 0.0
+    ? positiveRadius
+    : negativeRadius;
+  vec2 positionPx = sourcePx
+    + tangentPx * aCorner.x * alongRadius
+    + normalPx * aCorner.y * acrossRadius;
+  gl_Position = vec4(
+    positionPx / uTargetResolution * 2.0 - 1.0,
+    0.0,
+    1.0
+  );
+}
+`;

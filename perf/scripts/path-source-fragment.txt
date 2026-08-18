@@ -1,0 +1,125 @@
+export const PATH_INTEGRAL_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+flat in vec4 vSourceFrame;
+flat in vec4 vShape;
+flat in vec4 vEnergy;
+flat in float vReflectionScale;
+flat in vec3 vWaveColor;
+flat in vec3 vPaleColor;
+flat in vec3 vCoreColor;
+flat in vec3 vReflectionColor;
+
+layout(location = 0) out vec4 outWave;
+layout(location = 1) out vec4 outReflection;
+
+uniform vec2 uTargetResolution;
+uniform vec2 uCanvasResolution;
+uniform sampler2D uK0Lut;
+uniform mat3 uHueMatrix;
+uniform vec4 uLayerMask0;
+uniform vec2 uLayerMask1;
+uniform float uBrightness;
+uniform float uGlowAsymmetry;
+uniform vec4 uMaterialWeights0;
+uniform vec4 uMaterialWeights1;
+
+const float PI = 3.14159265358979323846;
+const float K0_MAX_ARGUMENT = ${HERO_PATH_K0_MAX_ARGUMENT.toFixed(8)};
+const float K0_MIN_ARGUMENT = ${HERO_PATH_K0_MIN_ARGUMENT.toFixed(8)};
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+
+float sampleK0(float argument) {
+  if (argument >= K0_MAX_ARGUMENT) return 0.0;
+  float normalized = sqrt(
+    clamp(
+      max(argument, K0_MIN_ARGUMENT) / K0_MAX_ARGUMENT,
+      0.0,
+      1.0
+    )
+  );
+  return texture(uK0Lut, vec2(normalized, 0.5)).r;
+}
+
+float lineKernel(float coefficient, float radius, float spread) {
+  float safeSpread = max(spread, 0.00001);
+  float effectiveCoefficient = coefficient / safeSpread;
+  return (
+    effectiveCoefficient / PI
+  ) * sampleK0(effectiveCoefficient * radius);
+}
+
+void main() {
+  float aspect = uCanvasResolution.x / max(uCanvasResolution.y, 1.0);
+  vec2 queryUv = gl_FragCoord.xy / uTargetResolution;
+  vec2 query = vec2(queryUv.x * aspect, queryUv.y);
+  vec2 offset = query - vSourceFrame.xy;
+  vec2 tangent = vSourceFrame.zw;
+  float signedPerpendicular =
+    tangent.x * offset.y - tangent.y * offset.x;
+  float perpendicularDistance = abs(signedPerpendicular);
+  float sideDirection = signedPerpendicular >= 0.0 ? 1.0 : -1.0;
+  float normalizedPerpendicular =
+    perpendicularDistance / max(vShape.x, 0.000001);
+  float upperSide = 0.5 + 0.5 * sideDirection
+    * smoothstep(0.0, 0.03, normalizedPerpendicular);
+  float directionalSpread = mix(vShape.z, vShape.w, upperSide);
+  float profileSpread = vShape.y * directionalSpread * vShape.x;
+  float pixelRadius = 0.08 / max(uTargetResolution.y, 1.0);
+  float radialDistance = sqrt(
+    dot(offset, offset) + pixelRadius * pixelRadius
+  );
+
+  float atmosphere = uLayerMask0.x
+    * lineKernel(4.6, radialDistance, profileSpread);
+  float broad = uLayerMask0.y
+    * lineKernel(6.2, radialDistance, profileSpread);
+  float body = uLayerMask0.z
+    * lineKernel(11.0, radialDistance, profileSpread);
+  float ridge = uLayerMask0.w
+    * lineKernel(20.0, radialDistance, profileSpread);
+  float core = uLayerMask1.x
+    * lineKernel(92.0, radialDistance, profileSpread);
+  float veil = uLayerMask1.y
+    * lineKernel(25.0, radialDistance, profileSpread);
+
+  float outerDirection = sideDirection
+    * smoothstep(0.0, 0.14, normalizedPerpendicular);
+  float bodyDirection = sideDirection
+    * smoothstep(0.0, 0.09, normalizedPerpendicular);
+  float glowBias = clamp(uGlowAsymmetry, -1.0, 1.0);
+  float outerBloom = 0.72 + 0.44 * glowBias * outerDirection;
+  float bodyBloom = 0.89 + 0.41 * glowBias * bodyDirection;
+
+  vec3 sourceWave = (
+      vWaveColor * atmosphere * uMaterialWeights0.x * outerBloom
+      + vWaveColor * broad * uMaterialWeights0.y * outerBloom
+      + vWaveColor * body * uMaterialWeights0.z * bodyBloom
+      + vPaleColor * ridge * uMaterialWeights0.w
+      + vCoreColor * core * uMaterialWeights1.x
+      + vWaveColor * veil * uMaterialWeights1.y
+    ) * uBrightness * uMaterialWeights1.z * vEnergy.x
+      * vEnergy.y * vEnergy.z * vEnergy.w;
+  sourceWave = uHueMatrix * sourceWave;
+  float waveLuminance = dot(sourceWave, LUMA);
+  float saturationBase = 1.0 - clamp(core * vEnergy.w, 0.0, 1.0);
+  float saturationBoost = 1.0
+    + 0.45 * uMaterialWeights1.w * saturationBase * saturationBase;
+  vec3 saturatedWave = max(
+    vec3(0.0),
+    mix(vec3(waveLuminance), sourceWave, saturationBoost)
+  );
+  float saturatedLuminance = dot(saturatedWave, LUMA);
+  vec3 wave = saturatedWave
+    * waveLuminance / max(saturatedLuminance, 0.0001);
+  float reflectionEnergy = (
+      broad * 0.36 + body * 0.54 + ridge * 0.34
+    ) * vEnergy.z * vReflectionScale * vEnergy.w;
+
+  outWave = vec4(wave, core * vEnergy.w);
+  outReflection = vec4(
+    vReflectionColor * reflectionEnergy,
+    reflectionEnergy
+  );
+}
+`;
