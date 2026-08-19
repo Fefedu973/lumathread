@@ -124,6 +124,23 @@ else
     'static glass uniform cache'
 fi
 
+# Reliability transforms intentionally touch the benchmark harness. Keep their
+# output canonical here so every downstream experiment that imports this script
+# reaches its own type/build/benchmark stage instead of failing Biome first.
+format_targets=(
+  perf/harness/gl-profiler.js
+  perf/scripts/benchmark-core.mjs
+  perf/scripts/benchmark-suite.mjs
+  perf/scripts/benchmark.mjs
+)
+existing_format_targets=()
+for path in "${format_targets[@]}"; do
+  [[ -f "$path" ]] && existing_format_targets+=("$path")
+done
+if [[ "${#existing_format_targets[@]}" -gt 0 ]]; then
+  bunx biome format --write "${existing_format_targets[@]}"
+fi
+
 printf '%s\n' \
   'final-stack-direct' \
   'integral-static-uniforms' \
