@@ -9,8 +9,7 @@ const replaceOnce = (before, after, label) => {
   if (source.indexOf(before, first + before.length) >= 0) {
     throw new Error(`Expected unique ${label}`);
   }
-  source =
-    source.slice(0, first) + after + source.slice(first + before.length);
+  source = source.slice(0, first) + after + source.slice(first + before.length);
 };
 
 replaceOnce(
@@ -26,4 +25,6 @@ replaceOnce(
 );
 
 await writeFile(path, source);
-console.log("Applied source-instanced quadrature to the travelling Hero core pass.");
+console.log(
+  "Applied source-instanced quadrature to the travelling Hero core pass.",
+);
