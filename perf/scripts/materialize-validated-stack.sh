@@ -21,6 +21,25 @@ copy_branch_file() {
   git show "refs/remotes/origin/${branch}:${path}" > "$path"
 }
 
+copy_branch_files_matching() {
+  local branch="$1"
+  local expression="$2"
+  local label="$3"
+  local count=0
+  while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    copy_branch_file "$branch" "$path"
+    count=$((count + 1))
+  done < <(
+    git ls-tree -r --name-only "refs/remotes/origin/${branch}" \
+      | grep -E "$expression" || true
+  )
+  if [[ "$count" -eq 0 ]]; then
+    echo "Unable to find ${label} on ${branch}." >&2
+    return 1
+  fi
+}
+
 find_branch_script() {
   local branch="$1"
   local pattern="$2"
@@ -55,8 +74,20 @@ run_branch_script() {
   esac
 }
 
-# Prefer the exact src tree that was directly benchmarked by the final-stack PR.
-# If that PR only stores a transformer, replay the transformer instead.
+prepare_final_stack_dependencies() {
+  local branch="$1"
+  copy_branch_files_matching \
+    "$branch" \
+    '^perf/experiments/major-2x-specializations\.patch\.gz\.b64\.[0-9]+$' \
+    'major renderer patch fragments'
+  copy_branch_file \
+    "$branch" \
+    'perf/scripts/apply-glass-effect-bounds-experiment.mjs'
+}
+
+# Prefer an exact src diff if the final-stack branch has already materialized its
+# candidate. Otherwise replay its transformer together with the files that the
+# transformer intentionally reads from its own branch.
 final_patch="/tmp/lumathread-final-stack-src.patch"
 git diff --binary "$base_sha" "refs/remotes/origin/${final_branch}" -- src \
   > "$final_patch"
@@ -65,21 +96,33 @@ if [[ -s "$final_patch" ]] && git apply --check "$final_patch"; then
   git apply --whitespace=nowarn "$final_patch"
 else
   rm -f "$final_patch"
+  prepare_final_stack_dependencies "$final_branch"
   run_branch_script \
     "$final_branch" \
     'apply.*(final|complete|validated).*(stack|renderer)|(final|complete).*(stack|renderer).*apply' \
     'direct final stack'
 fi
 
-# These two caches were measured incrementally after the exact direct stack.
-run_branch_script \
-  "$integral_branch" \
-  'apply.*integral.*(static.*uniform|uniform.*cache)|integral.*(static.*uniform|uniform.*cache).*apply' \
-  'static integral uniform cache'
-run_branch_script \
-  "$glass_branch" \
-  'apply.*glass.*(static.*uniform|uniform.*cache)|glass.*(static.*uniform|uniform.*cache).*apply' \
-  'static glass uniform cache'
+# The current direct-stack transformer already includes the integral cache. Keep
+# this replay idempotent so later versions may either include or omit it without
+# breaking consolidation.
+if grep -q 'integralStaticUniformKeys' src/runtime/path-renderer.ts; then
+  echo "Static integral uniform cache already materialized; skipping duplicate replay."
+else
+  run_branch_script \
+    "$integral_branch" \
+    'apply.*integral.*(static.*uniform|uniform.*cache)|integral.*(static.*uniform|uniform.*cache).*apply' \
+    'static integral uniform cache'
+fi
+
+if grep -q 'glassStaticUniformKeys' src/runtime/glass-terrain-renderer.ts; then
+  echo "Static glass uniform cache already materialized; skipping duplicate replay."
+else
+  run_branch_script \
+    "$glass_branch" \
+    'apply.*glass.*(static.*uniform|uniform.*cache)|glass.*(static.*uniform|uniform.*cache).*apply' \
+    'static glass uniform cache'
+fi
 
 printf '%s\n' \
   'final-stack-direct' \
