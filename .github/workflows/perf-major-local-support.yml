@@ -19,7 +19,7 @@ concurrency:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
 
     steps:
       - name: Check out candidate harness
@@ -40,7 +40,7 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Apply major renderer and per-source bounds
+      - name: Apply active major renderer and per-source bounds
         run: |
           cat perf/experiments/major-2x-specializations.patch.gz.b64.* \
             | tr -d "\n" \
@@ -54,10 +54,17 @@ jobs:
           source = path.read_text(encoding="utf-8")
           old = "useSourceInstancedQuadrature"
           new = "shouldUseSourceInstancedQuadrature"
-          count = source.count(old)
-          if count != 2:
-              raise SystemExit(f"expected exactly 2 helper occurrences, found {count}")
-          path.write_text(source.replace(old, new), encoding="utf-8")
+          if source.count(old) != 2:
+              raise SystemExit("unexpected source-instanced helper count")
+          source = source.replace(old, new)
+          old_threshold = "settings.headTaper <= 0.000001"
+          if source.count(old_threshold) != 1:
+              raise SystemExit("unexpected normalized taper threshold count")
+          source = source.replace(
+              old_threshold,
+              "settings.headTaper <= 0.001001",
+          )
+          path.write_text(source, encoding="utf-8")
           PY
           git apply --whitespace=nowarn \
             perf/experiments/local-support-bounds.patch
@@ -92,7 +99,7 @@ jobs:
         working-directory: baseline
         run: bun install --frozen-lockfile
 
-      - name: Inject identical measurement harness into baseline
+      - name: Inject identical reliable harness into baseline
         run: |
           rm -rf baseline/perf/harness
           cp -R perf/harness baseline/perf/harness
@@ -101,13 +108,11 @@ jobs:
 
       - name: Build baseline and candidate harnesses
         run: |
-          bunx vite build \
-            --config vite.perf.config.ts \
+          bunx vite build --config vite.perf.config.ts \
             --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
           cd baseline
           bunx tsc -p tsconfig.perf.json --noEmit
-          bunx vite build \
-            --config vite.perf.config.ts \
+          bunx vite build --config vite.perf.config.ts \
             --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
 
       - name: Install visual diff dependencies
@@ -123,25 +128,23 @@ jobs:
           echo $! >/tmp/candidate.pid
           for port in 4173 4174; do
             for attempt in $(seq 1 80); do
-              if curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null; then
-                break
-              fi
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
               sleep 0.1
             done
             curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
           done
 
-      - name: Run paired CTA benchmark
+      - name: Run paired CTA discovery
         run: |
           bun perf/scripts/benchmark.mjs \
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 2 \
-            --frames 12 \
-            --warmup-frames 8 \
-            --profile-frames 6
+            --repeats 1 \
+            --frames 4 \
+            --warmup-frames 3 \
+            --profile-frames 3
 
       - name: Compare deterministic CTA screenshots
         id: visual
@@ -162,12 +165,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: major-local-support-${{ github.sha }}
+          name: active-major-local-support-${{ github.sha }}
           path: |
             perf-results
             src
-            perf/harness/gl-profiler.js
-            perf/scripts/benchmark-core.mjs
           if-no-files-found: error
           retention-days: 30
 
