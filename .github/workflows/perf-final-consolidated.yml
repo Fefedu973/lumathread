@@ -71,6 +71,7 @@ jobs:
           cd baseline
           bun install --frozen-lockfile
           cd ..
+          mkdir -p baseline/perf
           rm -rf baseline/perf/harness
           cp -R perf/harness baseline/perf/harness
           cp vite.perf.config.ts baseline/vite.perf.config.ts
