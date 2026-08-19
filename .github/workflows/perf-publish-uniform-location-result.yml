@@ -1,0 +1,74 @@
+name: Publish uniform-location cache result
+
+on:
+  workflow_run:
+    workflows:
+      - Exact uniform-location cache discovery
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.workflow_run.head_branch == 'perf/major-2x-uniform-location-cache'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/major-2x-uniform-location-cache
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: uniform-location-cache-*
+          path: /tmp/uniform-location
+          merge-multiple: true
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish stable result snapshot
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          rm -rf perf/latest-uniform-location
+          mkdir -p perf/latest-uniform-location
+          find /tmp/uniform-location -type f \
+            \( -name 'benchmark.json' \
+            -o -name 'benchmark.md' \
+            -o -name 'uniform-location-target.json' \
+            -o -name 'uniform-location-target.md' \
+            -o -name 'visual-diff.json' \
+            -o -name 'visual-diff.md' \) \
+            -exec cp '{}' perf/latest-uniform-location/ \;
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          Path('perf/latest-uniform-location/run.json').write_text(
+              json.dumps(
+                  {
+                      'runId': int(os.environ['RUN_ID']),
+                      'runUrl': os.environ['RUN_URL'],
+                      'headSha': os.environ['RUN_SHA'],
+                      'conclusion': os.environ['RUN_CONCLUSION'],
+                  },
+                  indent=2,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add perf/latest-uniform-location
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'perf: publish uniform-location result [skip ci]'
+          git push origin HEAD:perf/major-2x-uniform-location-cache
