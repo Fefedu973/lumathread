@@ -46,7 +46,7 @@ jobs:
             refs/remotes/origin/perf/major-2x-final-consolidated:perf/scripts/materialize-validated-stack.sh \
             > /tmp/materialize-validated-stack.sh
           bash /tmp/materialize-validated-stack.sh
-          bunx biome format --write src/runtime/path-renderer.ts
+          bunx biome format --write src
 
       - name: Apply path composite and flat-dot static caches
         run: |
