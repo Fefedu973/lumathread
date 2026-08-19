@@ -31,8 +31,10 @@ replaceOnce(
 );
 
 replaceOnce(
-  "  float arcWeight = segmentLength * quadratureWeight;\n",
-  "  float arcWeight = segmentLengthPx * quadratureWeight;\n",
+  `  float arcWeight = segmentLength * quadratureWeight;
+  vec3 waveColor`,
+  `  float arcWeight = segmentLengthPx * quadratureWeight;
+  vec3 waveColor`,
   "source arc weight",
 );
 
@@ -85,8 +87,12 @@ replaceOnce(
 );
 
 replaceOnce(
-  "  float pixelRadius = 0.08 / max(uTargetResolution.y, 1.0);\n",
-  "  float pixelRadius = 0.08;\n",
+  `  float profileSpread = vShape.y * directionalSpread * vShape.x;
+  float pixelRadius = 0.08 / max(uTargetResolution.y, 1.0);
+`,
+  `  float profileSpread = vShape.y * directionalSpread * vShape.x;
+  float pixelRadius = 0.08;
+`,
   "pixel regularization radius",
 );
 
