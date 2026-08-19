@@ -1,31 +1,34 @@
 import { readFile, writeFile } from "node:fs/promises";
 
-async function replaceOnce(path, before, after, label = before.slice(0, 80)) {
-  const source = await readFile(path, "utf8");
-  const index = source.indexOf(before);
-  if (index < 0) throw new Error(`Missing ${label} in ${path}`);
-  if (source.indexOf(before, index + before.length) >= 0) {
-    throw new Error(`Non-unique ${label} in ${path}`);
-  }
-  await writeFile(
-    path,
-    source.slice(0, index) + after + source.slice(index + before.length),
-  );
-}
+const path = "src/runtime/glass-terrain-renderer.ts";
+let source = await readFile(path, "utf8");
 
-async function replaceAllExact(path, before, after, expectedCount, label) {
-  const source = await readFile(path, "utf8");
+const replaceOnce = (before, after, label) => {
+  const first = source.indexOf(before);
+  if (first < 0) throw new Error(`Missing ${label}`);
+  if (source.indexOf(before, first + before.length) >= 0) {
+    throw new Error(`Non-unique ${label}`);
+  }
+  source = source.slice(0, first) + after + source.slice(first + before.length);
+};
+
+const replaceAllExact = (before, after, expectedCount, label) => {
   const count = source.split(before).length - 1;
   if (count !== expectedCount) {
-    throw new Error(
-      `Expected ${expectedCount} ${label} blocks in ${path}, found ${count}`,
-    );
+    throw new Error(`Expected ${expectedCount} ${label} blocks, found ${count}`);
   }
-  await writeFile(path, source.split(before).join(after));
-}
+  source = source.split(before).join(after);
+};
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
+const indent = (value, spaces = 2) => {
+  const prefix = " ".repeat(spaces);
+  return value
+    .split("\n")
+    .map((line) => (line ? `${prefix}${line}` : line))
+    .join("\n");
+};
+
+replaceOnce(
   `  const {
     ensureTerrainResources,
     updateTerrainGeometry,
@@ -45,12 +48,92 @@ await replaceOnce(
   const glassStaticUniformKeys = new WeakMap<ProgramBundle, string>();
   const compositeStaticUniformKeys = new WeakMap<ProgramBundle, string>();
   const blurStaticUniformKeys = new WeakMap<ProgramBundle, string>();
+  const dotInteractionStaticUniformKeys = new WeakMap<ProgramBundle, string>();
 `,
   "glass uniform cache declarations",
 );
 
-await replaceAllExact(
-  "src/runtime/glass-terrain-renderer.ts",
+const interactionStartMarker = `  const applyDotInteractionUniforms = (`;
+const interactionEndMarker = `
+
+  const drawTerrainDots = (`;
+const interactionStart = source.indexOf(interactionStartMarker);
+const interactionEnd = source.indexOf(interactionEndMarker, interactionStart);
+if (interactionStart < 0 || interactionEnd < 0) {
+  throw new Error("Unable to locate dot interaction uniform helper");
+}
+const interactionReplacement = `  const applyDotInteractionUniforms = (
+    context: WebGLRenderingContext,
+    bundle: ProgramBundle,
+    settings: Settings,
+  ) => {
+    const interaction = settings.dotInteraction;
+    const active =
+      settings.dotsEnabled &&
+      interaction.enabled &&
+      pointerState.dotPointerActive;
+    uniform2f(
+      context,
+      bundle,
+      "uDotPointer",
+      pointerState.dotPointerX,
+      pointerState.dotPointerY,
+    );
+    uniform1f(context, bundle, "uDotPointerActive", active ? 1 : 0);
+
+    const pointerColor = hexToVec3(interaction.color);
+    const staticKey = [
+      resourceState.dpr,
+      interaction.radius,
+      interaction.softness,
+      interaction.brightness,
+      pointerColor[0],
+      pointerColor[1],
+      pointerColor[2],
+      interaction.colorStrength,
+      interaction.magnification,
+      interaction.terrainDisplacement,
+    ].join("|");
+    if (dotInteractionStaticUniformKeys.get(bundle) === staticKey) return;
+
+    uniform1f(
+      context,
+      bundle,
+      "uDotPointerRadius",
+      interaction.radius * resourceState.dpr,
+    );
+    uniform1f(context, bundle, "uDotPointerSoftness", interaction.softness);
+    uniform1f(context, bundle, "uDotPointerBrightness", interaction.brightness);
+    context.uniform3f(
+      bundle.uniforms.uDotPointerColor ?? null,
+      ...pointerColor,
+    );
+    uniform1f(
+      context,
+      bundle,
+      "uDotPointerColorStrength",
+      interaction.colorStrength,
+    );
+    uniform1f(
+      context,
+      bundle,
+      "uDotPointerMagnification",
+      interaction.magnification,
+    );
+    uniform1f(
+      context,
+      bundle,
+      "uTerrainPointerDisplacement",
+      interaction.terrainDisplacement,
+    );
+    dotInteractionStaticUniformKeys.set(bundle, staticKey);
+  };`;
+source =
+  source.slice(0, interactionStart) +
+  interactionReplacement +
+  source.slice(interactionEnd);
+
+replaceAllExact(
   `      uniform1i(gl, resources.blurProgram, "uSource", 0);
       uniform2f(
         gl,
@@ -64,11 +147,10 @@ await replaceAllExact(
   `      uniform2f(
 `,
   2,
-  "blur repeated static uniform",
+  "repeated blur static uniforms",
 );
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
+replaceOnce(
   `    activateProgram(resources.blurProgram.program);
     bindFullscreen(resources.blurProgram);
     const iterations = 2 + Math.round(settings.glassText.diffusion * 2);
@@ -89,11 +171,10 @@ await replaceOnce(
     }
     const iterations = 2 + Math.round(settings.glassText.diffusion * 2);
 `,
-  "scene blur static uniform initialization",
+  "scene blur cache initialization",
 );
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
+replaceOnce(
   `    activateProgram(resources.blurProgram.program);
     bindFullscreen(resources.blurProgram);
     const normalizedRadius = radiusPhysicalPx * 0.55;
@@ -114,19 +195,24 @@ await replaceOnce(
     }
     const normalizedRadius = radiusPhysicalPx * 0.55;
 `,
-  "effect blur static uniform initialization",
+  "effect blur cache initialization",
 );
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, blurredScene);
-    uniform1i(gl, glassProgram, "uScene", 0);
-`,
-  `    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, blurredScene);
-    const tint = hexToVec3(settings.glassText.tint);
-    const glassStaticKey = [
+const glassStartMarker = `    uniform1i(gl, glassProgram, "uScene", 0);\n`;
+const glassTimeMarker = `    uniform1f(gl, glassProgram, "uTime", getClockTime());\n`;
+const glassEffectMarker = `    if (effectBounds) {\n`;
+const glassStart = source.indexOf(glassStartMarker);
+const glassTime = source.indexOf(glassTimeMarker, glassStart);
+const glassEffect = source.indexOf(glassEffectMarker, glassTime);
+if (glassStart < 0 || glassTime < 0 || glassEffect < 0) {
+  throw new Error("Unable to locate glass uniform ranges");
+}
+const glassBeforeTime = source.slice(glassStart, glassTime);
+const glassAfterTime = source.slice(
+  glassTime + glassTimeMarker.length,
+  glassEffect,
+);
+const glassStaticPrefix = `    const glassStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
       resourceState.dpr,
@@ -160,9 +246,7 @@ await replaceOnce(
       settings.glassText.twinkleDensity,
       settings.glassText.twinkleSpeed,
       settings.glassText.twinkleSize,
-      tint[0],
-      tint[1],
-      tint[2],
+      settings.glassText.tint,
       settings.glassText.tintStrength,
       settings.glassText.saturation,
       settings.glassText.brightness,
@@ -171,114 +255,55 @@ await replaceOnce(
     const updateGlassStaticUniforms =
       glassStaticUniformKeys.get(glassProgram) !== glassStaticKey;
     if (updateGlassStaticUniforms) {
-      uniform1i(gl, glassProgram, "uScene", 0);
-`,
-  "glass static uniform key and guard",
-);
+`;
+const glassReplacement =
+  glassStaticPrefix +
+  indent(glassBeforeTime, 2) +
+  indent(glassAfterTime, 2) +
+  `      glassStaticUniformKeys.set(glassProgram, glassStaticKey);\n` +
+  `    }\n` +
+  glassTimeMarker;
+source =
+  source.slice(0, glassStart) +
+  glassReplacement +
+  source.slice(glassEffect);
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    uniform1f(gl, glassProgram, "uTime", getClockTime());
-    uniform1f(
-`,
-  `    }
-    uniform1f(gl, glassProgram, "uTime", getClockTime());
-    if (updateGlassStaticUniforms) {
-      uniform1f(
-`,
-  "glass dynamic time split",
-);
-
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    const tint = hexToVec3(settings.glassText.tint);
-    gl.uniform3f(glassProgram.uniforms.uTint ?? null, ...tint);
-`,
-  `    gl.uniform3f(glassProgram.uniforms.uTint ?? null, ...tint);
-`,
-  "duplicate glass tint declaration",
-);
-
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    uniform1f(gl, glassProgram, "uBrightness", settings.glassText.brightness);
-    uniform1f(gl, glassProgram, "uOpacity", settings.glassText.opacity);
-    if (effectBounds) {
-`,
-  `    uniform1f(gl, glassProgram, "uBrightness", settings.glassText.brightness);
-    uniform1f(gl, glassProgram, "uOpacity", settings.glassText.opacity);
-      glassStaticUniformKeys.set(glassProgram, glassStaticKey);
-    }
-    if (effectBounds) {
-`,
-  "close glass static uniform guard",
-);
-
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, blurredEffect);
-    uniform1i(gl, resources.compositeProgram, "uScene", 0);
-    uniform1i(gl, resources.compositeProgram, "uEffect", 1);
-    uniform1i(gl, resources.compositeProgram, "uBlurEffect", 2);
-    uniform2f(
+const compositeStartMarker = `    uniform1i(gl, resources.compositeProgram, "uScene", 0);\n`;
+const compositeDynamicMarker = `    uniform1f(
       gl,
       resources.compositeProgram,
-      "uResolution",
+      "uSceneOpacity",
+`;
+const compositeStart = source.indexOf(compositeStartMarker);
+const compositeDynamic = source.indexOf(
+  compositeDynamicMarker,
+  compositeStart,
+);
+if (compositeStart < 0 || compositeDynamic < 0) {
+  throw new Error("Unable to locate composite static uniform range");
+}
+const compositeStatic = source.slice(compositeStart, compositeDynamic);
+const compositeKeyPrefix = `    const compositeStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
-    );
-`,
-  `    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, blurredEffect);
-    const compositeStaticKey = [
-      resourceState.canvasWidth,
-      resourceState.canvasHeight,
-      resourceState.dpr,
-      settings.glassText.introOffsetY,
     ].join("|");
     if (
       compositeStaticUniformKeys.get(resources.compositeProgram) !==
       compositeStaticKey
     ) {
-      uniform1i(gl, resources.compositeProgram, "uScene", 0);
-      uniform1i(gl, resources.compositeProgram, "uEffect", 1);
-      uniform1i(gl, resources.compositeProgram, "uBlurEffect", 2);
-      uniform2f(
-        gl,
-        resources.compositeProgram,
-        "uResolution",
-        resourceState.canvasWidth,
-        resourceState.canvasHeight,
-      );
-      uniform1f(
-        gl,
-        resources.compositeProgram,
-        "uOffsetY",
-        settings.glassText.introOffsetY * resourceState.dpr,
-      );
-      compositeStaticUniformKeys.set(
-        resources.compositeProgram,
-        compositeStaticKey,
-      );
-    }
-`,
-  "composite static uniform cache",
-);
+`;
+const compositeReplacement =
+  compositeKeyPrefix +
+  indent(compositeStatic, 2) +
+  `      compositeStaticUniformKeys.set(\n` +
+  `        resources.compositeProgram,\n` +
+  `        compositeStaticKey,\n` +
+  `      );\n` +
+  `    }\n`;
+source =
+  source.slice(0, compositeStart) +
+  compositeReplacement +
+  source.slice(compositeDynamic);
 
-await replaceOnce(
-  "src/runtime/glass-terrain-renderer.ts",
-  `    uniform1f(
-      gl,
-      resources.compositeProgram,
-      "uOffsetY",
-      settings.glassText.introOffsetY * resourceState.dpr,
-    );
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-`,
-  `    gl.drawArrays(gl.TRIANGLES, 0, 3);
-`,
-  "remove repeated composite offset uniform",
-);
-
-console.log("Applied glass, blur, and composite static-uniform caches.");
+await writeFile(path, source);
+console.log("Applied glass, blur, composite, and dot static-uniform caches.");
