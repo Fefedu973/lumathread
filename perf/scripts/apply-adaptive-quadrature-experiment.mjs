@@ -2,7 +2,9 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const requested = Number(process.argv[2] ?? "3");
 if (requested !== 2 && requested !== 3) {
-  throw new Error(`Expected quadrature point count 2 or 3, received ${requested}`);
+  throw new Error(
+    `Expected quadrature point count 2 or 3, received ${requested}`,
+  );
 }
 
 async function replaceOnce(path, before, after) {
