@@ -15,7 +15,9 @@ const replaceOnce = (before, after, label) => {
 const replaceAllExact = (before, after, expectedCount, label) => {
   const count = source.split(before).length - 1;
   if (count !== expectedCount) {
-    throw new Error(`Expected ${expectedCount} ${label} blocks, found ${count}`);
+    throw new Error(
+      `Expected ${expectedCount} ${label} blocks, found ${count}`,
+    );
   }
   source = source.split(before).join(after);
 };
@@ -208,10 +210,7 @@ if (glassStart < 0 || glassTime < 0 || glassEffect < 0) {
   throw new Error("Unable to locate glass uniform ranges");
 }
 const glassBeforeTime = source.slice(glassStart, glassTime);
-const glassAfterTime = source.slice(
-  glassTime + glassTimeMarker.length,
-  glassEffect,
-);
+const glassAfterTime = source.slice(glassTime + glassTimeMarker.length, glassEffect);
 const glassStaticPrefix = `    const glassStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
@@ -263,10 +262,7 @@ const glassReplacement =
   `      glassStaticUniformKeys.set(glassProgram, glassStaticKey);\n` +
   `    }\n` +
   glassTimeMarker;
-source =
-  source.slice(0, glassStart) +
-  glassReplacement +
-  source.slice(glassEffect);
+source = source.slice(0, glassStart) + glassReplacement + source.slice(glassEffect);
 
 const compositeStartMarker = `    uniform1i(gl, resources.compositeProgram, "uScene", 0);\n`;
 const compositeDynamicMarker = `    uniform1f(
@@ -275,10 +271,7 @@ const compositeDynamicMarker = `    uniform1f(
       "uSceneOpacity",
 `;
 const compositeStart = source.indexOf(compositeStartMarker);
-const compositeDynamic = source.indexOf(
-  compositeDynamicMarker,
-  compositeStart,
-);
+const compositeDynamic = source.indexOf(compositeDynamicMarker, compositeStart);
 if (compositeStart < 0 || compositeDynamic < 0) {
   throw new Error("Unable to locate composite static uniform range");
 }
