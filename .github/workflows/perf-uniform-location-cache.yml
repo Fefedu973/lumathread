@@ -1,0 +1,170 @@
+name: Exact uniform-location cache discovery
+
+on:
+  push:
+    branches:
+      - perf/major-2x-uniform-location-cache
+  pull_request:
+    branches:
+      - perf/major-2x-final-consolidated
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uniform-location-cache-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out experiment branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Import and materialize validated renderer stack
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/perf/major-2x-final-consolidated:refs/remotes/origin/perf/major-2x-final-consolidated
+          git show \
+            refs/remotes/origin/perf/major-2x-final-consolidated:perf/scripts/materialize-validated-stack.sh \
+            > /tmp/materialize-validated-stack.sh
+          bash /tmp/materialize-validated-stack.sh
+          node perf/scripts/apply-uniform-location-cache.mjs
+
+      - name: Format and validate candidate
+        run: |
+          bunx biome format --write src perf/scripts/apply-uniform-location-cache.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out frozen original renderer
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
+      - name: Install baseline and identical harness
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build deterministic harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual comparison dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              if curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run paired full-surface discovery
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --repeats 3 \
+            --frames 16 \
+            --warmup-frames 10 \
+            --profile-frames 8
+
+      - name: Compare deterministic screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate direct target progress
+        if: always()
+        continue-on-error: true
+        run: |
+          git show \
+            refs/remotes/origin/perf/major-2x-final-consolidated:perf/scripts/evaluate-consolidated-target.py \
+            > /tmp/evaluate-consolidated-target.py
+          if [ -f perf-results/benchmark.json ]; then
+            python /tmp/evaluate-consolidated-target.py \
+              --input perf-results/benchmark.json \
+              --output perf-results/uniform-location-target.json \
+              --markdown perf-results/uniform-location-target.md \
+              --target-ratio 0.5 \
+              --maximum-regression 0.02 \
+              --minimum-scenarios 5 \
+              --minimum-gpu-scenarios 4
+          fi
+
+      - name: Publish summary
+        if: always()
+        run: |
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/uniform-location-target.md || cat perf-results/uniform-location-target.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact result and source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uniform-location-cache-${{ github.sha }}
+          path: |
+            perf-results
+            src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
