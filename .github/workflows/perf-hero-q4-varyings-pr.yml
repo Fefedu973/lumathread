@@ -62,22 +62,26 @@ jobs:
               "${HERO_PATH_K0_MIN_ARGUMENT.toFixed(8)}",
               "0.00010000",
           )
-          source = source.replace(
-              '''    for (const bundle of resources.sourceIntegralPrograms) {
-                exactGl.deleteProgram(bundle.program);
-              }''',
-              '''    for (const program of resources.sourceIntegralPrograms) {
-                exactGl.deleteProgram(program.program);
-              }''',
-          )
-          source = source.replace(
-              '''      for (const bundle of sourceIntegralPrograms) {
-                exactGl.deleteProgram(bundle.program);
-              }''',
-              '''      for (const program of sourceIntegralPrograms) {
-                exactGl.deleteProgram(program.program);
-              }''',
-          )
+          for before, after in (
+              (
+                  "const bundle of resources.sourceIntegralPrograms",
+                  "const program of resources.sourceIntegralPrograms",
+              ),
+              (
+                  "const bundle of resources.segmentQ4Programs",
+                  "const program of resources.segmentQ4Programs",
+              ),
+              (
+                  "const bundle of sourceIntegralPrograms",
+                  "const program of sourceIntegralPrograms",
+              ),
+              (
+                  "const bundle of segmentQ4Programs",
+                  "const program of segmentQ4Programs",
+              ),
+              ("deleteProgram(bundle.program)", "deleteProgram(program.program)"),
+          ):
+              source = source.replace(before, after)
           path.write_text(source, encoding="utf-8")
           PY
           node perf/scripts/apply-hero-q4-varying-experiment.mjs
