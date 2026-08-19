@@ -1,0 +1,195 @@
+name: Publish clear-elision ranking
+
+on:
+  workflow_run:
+    workflows:
+      - Exact clear-elision matrix
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.workflow_run.head_branch == 'perf/major-2x-clear-elision'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/major-2x-clear-elision
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clear-elision-*
+          path: /tmp/clear-elision
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rank bit-identical clear removals
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          rm -rf perf/latest-clear-elision
+          mkdir -p perf/latest-clear-elision
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import math
+          import os
+          import re
+          from pathlib import Path
+          from typing import Any
+
+          root = Path('/tmp/clear-elision')
+
+          def finite(value: Any):
+              return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)) else None
+
+          def walk(value: Any, path='root'):
+              if isinstance(value, list):
+                  for index, child in enumerate(value):
+                      yield from walk(child, f'{path}[{index}]')
+              elif isinstance(value, dict):
+                  yield path, value
+                  for key, child in value.items():
+                      yield from walk(child, f'{path}.{key}')
+
+          def ratio_records(report: Any):
+              records = []
+              for path, value in walk(report):
+                  label = next((value.get(key) for key in ('scenario', 'name', 'id', 'label') if isinstance(value.get(key), str)), path)
+                  wall = next((finite(value.get(key)) for key in ('pairedWallRatio', 'wallRatio', 'candidateToBaselineRatio') if finite(value.get(key)) is not None), None)
+                  gpu = next((finite(value.get(key)) for key in ('pairedGpuRatio', 'gpuRatio', 'candidateToBaselineGpuRatio') if finite(value.get(key)) is not None), None)
+                  baseline = value.get('baseline')
+                  candidate = value.get('candidate')
+                  if isinstance(baseline, dict) and isinstance(candidate, dict):
+                      if wall is None:
+                          for key in ('medianWallMs', 'meanWallMs', 'wallMs', 'medianMs'):
+                              before = finite(baseline.get(key))
+                              after = finite(candidate.get(key))
+                              if before and after is not None:
+                                  wall = after / before
+                                  break
+                      if gpu is None:
+                          for key in ('medianGpuMs', 'meanGpuMs', 'gpuMs', 'gpuDurationMs', 'totalGpuMs'):
+                              before = finite(baseline.get(key))
+                              after = finite(candidate.get(key))
+                              if before and after is not None:
+                                  gpu = after / before
+                                  break
+                  if wall or gpu:
+                      records.append((str(label), wall, gpu))
+              return records
+
+          def geometric(values):
+              return math.exp(sum(math.log(value) for value in values) / len(values)) if values else None
+
+          def visual_pass(directory: Path):
+              files = list(directory.rglob('visual-diff.json'))
+              if not files:
+                  return False
+              report = json.loads(files[0].read_text(encoding='utf-8'))
+              booleans = []
+              for path, value in walk(report):
+                  for key in ('passed', 'pass', 'ok', 'accepted', 'success'):
+                      if isinstance(value.get(key), bool):
+                          booleans.append(value[key])
+              return bool(booleans) and all(booleans)
+
+          rankings = []
+          for directory in sorted(path for path in root.iterdir() if path.is_dir()):
+              match = re.search(r'clear-elision-(\d+)-', directory.name)
+              if not match:
+                  continue
+              index = int(match.group(1))
+              benchmark_files = list(directory.rglob('benchmark.json'))
+              if not benchmark_files:
+                  rankings.append({'index': index, 'visualPass': False, 'error': 'missing benchmark.json'})
+                  continue
+              report = json.loads(benchmark_files[0].read_text(encoding='utf-8'))
+              records = ratio_records(report)
+              wall_values = [wall for label, wall, gpu in records if wall and any(word in label.lower() for word in ('cta', 'desktop', 'mobile', 'dark', 'light'))]
+              gpu_values = [gpu for label, wall, gpu in records if gpu and any(word in label.lower() for word in ('cta', 'desktop', 'mobile', 'dark', 'light'))]
+              if not wall_values:
+                  wall_values = [wall for _, wall, _ in records if wall]
+              if not gpu_values:
+                  gpu_values = [gpu for _, _, gpu in records if gpu]
+              rankings.append(
+                  {
+                      'index': index,
+                      'visualPass': visual_pass(directory),
+                      'wallRatio': geometric(wall_values),
+                      'gpuRatio': geometric(gpu_values),
+                      'scenarioCount': len(wall_values),
+                      'gpuScenarioCount': len(gpu_values),
+                  }
+              )
+
+          eligible = [
+              row for row in rankings
+              if row.get('visualPass')
+              and row.get('wallRatio') is not None
+              and row.get('gpuRatio') is not None
+              and row['wallRatio'] < 0.995
+              and row['gpuRatio'] < 0.995
+          ]
+          eligible.sort(key=lambda row: (row['wallRatio'] * row['gpuRatio'], row['gpuRatio']))
+          selected = eligible[0]['index'] if eligible else None
+          result = {
+              'runId': int(os.environ['RUN_ID']),
+              'runUrl': os.environ['RUN_URL'],
+              'headSha': os.environ['RUN_SHA'],
+              'conclusion': os.environ['RUN_CONCLUSION'],
+              'selectedIndex': selected,
+              'rankings': sorted(rankings, key=lambda row: row['index']),
+          }
+          output = Path('perf/latest-clear-elision')
+          (output / 'ranking.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          if selected is not None:
+              (output / 'selected-index.txt').write_text(f'{selected}\n', encoding='utf-8')
+          rows = []
+          for row in result['rankings']:
+              wall = row.get('wallRatio')
+              gpu = row.get('gpuRatio')
+              rows.append(
+                  f"| {row['index']} | {'PASS' if row.get('visualPass') else 'FAIL'} | "
+                  f"{wall:.4f if wall is not None else '—'} | {gpu:.4f if gpu is not None else '—'} |"
+              )
+          # Build markdown without conditional formatting inside f-string format specs.
+          markdown_rows = []
+          for row in result['rankings']:
+              wall_text = f"{row['wallRatio']:.4f}" if row.get('wallRatio') is not None else '—'
+              gpu_text = f"{row['gpuRatio']:.4f}" if row.get('gpuRatio') is not None else '—'
+              markdown_rows.append(
+                  f"| {row['index']} | {'PASS' if row.get('visualPass') else 'FAIL'} | {wall_text} | {gpu_text} |"
+              )
+          markdown = (
+              '# Exact clear-elision ranking\n\n'
+              f"- Selected index: **{selected if selected is not None else 'none'}**\n"
+              f"- Matrix conclusion: **{os.environ['RUN_CONCLUSION']}**\n\n"
+              '| Index | Visual | Wall ratio | GPU ratio |\n'
+              '|---:|---|---:|---:|\n'
+              + '\n'.join(markdown_rows)
+              + '\n'
+          )
+          (output / 'ranking.md').write_text(markdown, encoding='utf-8')
+          PY
+
+      - name: Commit stable ranking
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add perf/latest-clear-elision
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'perf: publish exact clear-elision ranking [skip ci]'
+          git push origin HEAD:perf/major-2x-clear-elision
