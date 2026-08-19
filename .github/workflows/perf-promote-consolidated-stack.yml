@@ -1,0 +1,68 @@
+name: Promote proven consolidated renderer stack
+
+on:
+  workflow_run:
+    workflows:
+      - Final exact renderer consolidation
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    if: >-
+      github.event.workflow_run.head_branch == 'perf/major-2x-final-consolidated' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the exact proven source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Materialize and validate the proven stack
+        run: |
+          bun install --frozen-lockfile
+          bash perf/scripts/materialize-validated-stack.sh
+          bunx biome format --write src
+          bun run check
+          bun run build
+
+      - name: Publish a reviewable source branch
+        env:
+          PROVEN_RUN_ID: ${{ github.event.workflow_run.id }}
+          PROVEN_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          PROVEN_SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          mkdir -p perf/proven-consolidated
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          Path('perf/proven-consolidated/provenance.json').write_text(
+              json.dumps(
+                  {
+                      'runId': int(os.environ['PROVEN_RUN_ID']),
+                      'runUrl': os.environ['PROVEN_RUN_URL'],
+                      'sourceSha': os.environ['PROVEN_SOURCE_SHA'],
+                      'baselineSha': '7f4289aa3ff640f479701ceec0b0d790af037692',
+                  },
+                  indent=2,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git switch -C perf/major-2x-final-proven
+          git add src perf/materialized-stack.txt perf/proven-consolidated
+          git commit -m 'perf: materialize directly proven 2x renderer stack'
+          git push --force-with-lease origin HEAD:perf/major-2x-final-proven
