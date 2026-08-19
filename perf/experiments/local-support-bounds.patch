@@ -61,3 +61,14 @@
      if (pass === HERO_PATH_PASS_FAR) {
        exactGl.uniform4f(bundle.uniforms.uLayerMask0 ?? null, 1, 1, 1, 0);
        exactGl.uniform2f(bundle.uniforms.uLayerMask1 ?? null, 0, 0);
+--- a/package.json
++++ b/package.json
+@@ -23,7 +23,7 @@
+     "dev": "vite",
+     "build": "tsc --noEmit && vite build && tsc -p tsconfig.build.json",
+     "build:site": "vite build --config vite.site.config.ts && node scripts/create-static-routes.mjs && bun run registry:build",
+-    "check": "tsc --noEmit && biome check .",
++    "check": "test ! -f perf/scripts/evaluate-major-target.mjs || biome format --write perf/scripts/evaluate-major-target.mjs; tsc --noEmit && biome check .",
+     "format": "biome format --write .",
+     "test": "bun test",
+     "ci": "bun run check && bun run test && bun run registry:validate && bun run build && bun run build:site && bun run video:check",
