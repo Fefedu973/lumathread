@@ -1,0 +1,218 @@
+name: Major CTA adaptive quadrature
+
+on:
+  push:
+    branches:
+      - perf/major-2x-adaptive-quadrature
+  pull_request:
+    branches:
+      - perf/major-2x-specializations
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: major-adaptive-quadrature-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: CTA quadrature (${{ matrix.candidate }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate:
+          - q3
+          - q2
+          - q3-support
+          - q2-support
+
+    steps:
+      - name: Check out experiment branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply major renderer and adaptive quadrature
+        shell: bash
+        run: |
+          cat perf/experiments/major-2x-specializations.patch.gz.b64.* \
+            | tr -d "\n" \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/major.patch
+          git apply --whitespace=nowarn /tmp/major.patch
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/runtime/path-renderer.ts")
+          source = path.read_text(encoding="utf-8")
+          old = "useSourceInstancedQuadrature"
+          new = "shouldUseSourceInstancedQuadrature"
+          count = source.count(old)
+          if count != 2:
+              raise SystemExit(f"expected exactly 2 helper occurrences, found {count}")
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+          candidate="${{ matrix.candidate }}"
+          if [[ "$candidate" == q2* ]]; then
+            node perf/scripts/apply-adaptive-quadrature-experiment.mjs 2
+          else
+            node perf/scripts/apply-adaptive-quadrature-experiment.mjs 3
+          fi
+          if [[ "$candidate" == *support ]]; then
+            git apply --whitespace=nowarn \
+              perf/experiments/local-support-bounds.patch
+          fi
+          git fetch origin perf/major-2x-local-support-bounds --depth=1
+          git show FETCH_HEAD:perf/scripts/apply-benchmark-reliability-fixes.mjs \
+            > /tmp/apply-benchmark-reliability-fixes.mjs
+          node /tmp/apply-benchmark-reliability-fixes.mjs
+
+      - name: Format and validate candidate
+        run: |
+          bunx biome format --write \
+            src/rendering/shaders.ts \
+            src/rendering/webgl-resources.ts \
+            src/runtime/path-renderer.ts \
+            src/runtime/glass-terrain-renderer.ts \
+            src/runtime/resource-manager.ts \
+            src/runtime/draw-common.ts \
+            perf/harness/gl-profiler.js \
+            perf/scripts/benchmark-core.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/evaluate-major-target.mjs \
+            perf/scripts/apply-adaptive-quadrature-experiment.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out exact current baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install baseline dependencies
+        working-directory: baseline
+        run: bun install --frozen-lockfile
+
+      - name: Inject identical measurement harness into baseline
+        run: |
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build baseline and candidate harnesses
+        run: |
+          bunx vite build \
+            --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build \
+            --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual diff dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 80); do
+              if curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run paired CTA benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --focus cta \
+            --repeats 2 \
+            --frames 8 \
+            --warmup-frames 6 \
+            --profile-frames 4
+
+      - name: Compare deterministic CTA screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate wall and GPU target progress
+        if: always()
+        run: |
+          if [ -f perf-results/benchmark.json ]; then
+            node perf/scripts/evaluate-major-target.mjs \
+              --input perf-results/benchmark.json \
+              --output perf-results/major-target-evaluation.json \
+              --markdown perf-results/major-target-evaluation.md \
+              --target-ratio 0.5 \
+              --maximum-regression 0.02
+          fi
+
+      - name: Publish summary
+        if: always()
+        run: |
+          printf '## Candidate: %s\n\n' "${{ matrix.candidate }}" >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/major-target-evaluation.md || cat perf-results/major-target-evaluation.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload candidate results and exact source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-${{ matrix.candidate }}-${{ github.sha }}
+          path: |
+            perf-results
+            src
+            perf/harness/gl-profiler.js
+            perf/scripts/benchmark-core.mjs
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
