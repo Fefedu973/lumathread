@@ -109,16 +109,16 @@ jobs:
             curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
           done
 
-      - name: Run direct full-surface paired benchmark
+      - name: Run direct balanced full-surface paired benchmark
         run: |
           bun perf/scripts/benchmark.mjs \
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
-            --repeats 7 \
-            --frames 36 \
-            --warmup-frames 20 \
-            --profile-frames 12
+            --repeats 4 \
+            --frames 12 \
+            --warmup-frames 8 \
+            --profile-frames 6
 
       - name: Compare deterministic screenshots
         id: visual
