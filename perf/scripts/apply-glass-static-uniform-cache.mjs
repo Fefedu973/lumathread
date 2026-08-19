@@ -210,7 +210,10 @@ if (glassStart < 0 || glassTime < 0 || glassEffect < 0) {
   throw new Error("Unable to locate glass uniform ranges");
 }
 const glassBeforeTime = source.slice(glassStart, glassTime);
-const glassAfterTime = source.slice(glassTime + glassTimeMarker.length, glassEffect);
+const glassAfterTime = source.slice(
+  glassTime + glassTimeMarker.length,
+  glassEffect,
+);
 const glassStaticPrefix = `    const glassStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
@@ -262,7 +265,8 @@ const glassReplacement =
   `      glassStaticUniformKeys.set(glassProgram, glassStaticKey);\n` +
   `    }\n` +
   glassTimeMarker;
-source = source.slice(0, glassStart) + glassReplacement + source.slice(glassEffect);
+source =
+  source.slice(0, glassStart) + glassReplacement + source.slice(glassEffect);
 
 const compositeStartMarker = `    uniform1i(gl, resources.compositeProgram, "uScene", 0);\n`;
 const compositeDynamicMarker = `    uniform1f(
