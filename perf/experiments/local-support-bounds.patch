@@ -1,6 +1,6 @@
 --- a/src/rendering/shaders.ts
 +++ b/src/rendering/shaders.ts
-@@ -973,7 +973,10 @@ vec3 lightThemeTintColor(vec3 sourceColor) {
+@@ -973,7 +973,11 @@ vec3 lightThemeTintColor(vec3 sourceColor) {
    }
  
    vec3 chroma = positive / peak;
@@ -13,7 +13,7 @@
    // Bright cyan and green disappear against the light canvas when they are
    // pushed toward white. Preserve their hue while capping luminance so the
    // filament and its reflected dots retain contrast in the light theme.
-@@ -1222,6 +1225,7 @@
+@@ -1222,6 +1226,7 @@
  uniform vec2 uCanvasResolution;
  uniform float uSupportRadiusPositivePx;
  uniform float uSupportRadiusNegativePx;
@@ -21,7 +21,7 @@
  uniform sampler2D uPalette;
  uniform sampler2D uProfiles;
  uniform mat3 uHueMatrix;
-@@ -1473,8 +1477,25 @@
+@@ -1473,8 +1478,25 @@
    vec2 tangentPx = directionPx / max(length(directionPx), 0.0001);
    vec2 normalPx = vec2(-tangentPx.y, tangentPx.x);
    vec2 sourcePx = mix(startPx, endPx, sourceParameter);
