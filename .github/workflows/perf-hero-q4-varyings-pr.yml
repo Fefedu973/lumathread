@@ -47,7 +47,7 @@ jobs:
             > /tmp/consolidated-stack.patch
           test -s /tmp/consolidated-stack.patch
 
-      - name: Normalize generated constants and apply q4 candidate
+      - name: Normalize generated constants and stack markers
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -61,6 +61,22 @@ jobs:
           source = source.replace(
               "${HERO_PATH_K0_MIN_ARGUMENT.toFixed(8)}",
               "0.00010000",
+          )
+          source = source.replace(
+              "    for (const bundle of resources.sourceIntegralPrograms) {\\n"
+              "      exactGl.deleteProgram(bundle.program);\\n"
+              "    }",
+              "    for (const program of resources.sourceIntegralPrograms) {\\n"
+              "      exactGl.deleteProgram(program.program);\\n"
+              "    }",
+          )
+          source = source.replace(
+              "      for (const bundle of sourceIntegralPrograms) {\\n"
+              "        exactGl.deleteProgram(bundle.program);\\n"
+              "      }",
+              "      for (const program of sourceIntegralPrograms) {\\n"
+              "        exactGl.deleteProgram(program.program);\\n"
+              "      }",
           )
           path.write_text(source, encoding="utf-8")
           PY
