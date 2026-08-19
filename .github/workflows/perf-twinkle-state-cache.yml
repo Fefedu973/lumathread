@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - perf/major-2x-twinkle-state-cache
+  pull_request:
+    branches:
+      - perf/major-2x-final-consolidated
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: consolidated-twinkle-state-${{ github.ref }}
+  group: consolidated-twinkle-state-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
