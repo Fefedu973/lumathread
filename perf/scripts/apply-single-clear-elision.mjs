@@ -14,7 +14,8 @@ if (!Number.isInteger(selectedIndex) && !countOnly) {
 }
 
 const source = await readFile(path, "utf8");
-const pattern = /\b([A-Za-z_$][\w$]*)\.clearColor\([^;]*\);\s*\1\.clear\(\s*\1\.COLOR_BUFFER_BIT\s*\);/g;
+const pattern =
+  /\b([A-Za-z_$][\w$]*)\.clearColor\([^;]*\);\s*\1\.clear\(\s*\1\.COLOR_BUFFER_BIT\s*\);/g;
 const matches = [...source.matchAll(pattern)];
 
 if (countOnly) {
