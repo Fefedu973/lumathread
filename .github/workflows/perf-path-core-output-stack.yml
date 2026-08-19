@@ -1,0 +1,147 @@
+name: Path core-output stack discovery
+
+on:
+  push:
+    branches:
+      - perf/major-2x-path-core-output-stack
+  pull_request:
+    branches:
+      - perf/major-2x-final-consolidated
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: path-core-output-stack-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bun install --frozen-lockfile
+
+      - name: Materialize stack and core-output fusion
+        run: |
+          git fetch --no-tags origin \
+            +refs/heads/perf/major-2x-final-consolidated:refs/remotes/origin/perf/major-2x-final-consolidated
+          git show \
+            refs/remotes/origin/perf/major-2x-final-consolidated:perf/scripts/materialize-validated-stack.sh \
+            > /tmp/materialize.sh
+          bash /tmp/materialize.sh
+          if [ ! -f perf/scripts/apply-path-core-output-experiment.mjs ]; then
+            git show \
+              refs/remotes/origin/perf/major-2x-final-consolidated:perf/scripts/apply-path-core-output-experiment.mjs \
+              > perf/scripts/apply-path-core-output-experiment.mjs
+          fi
+          git diff --binary \
+            b3c926b88b4861d851075015c141c67f225517fb -- src \
+            > /tmp/validated-stack.patch
+          node perf/scripts/apply-path-core-output-experiment.mjs
+          bunx biome format --write src perf/scripts/apply-path-core-output-experiment.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out stack-only baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+      - run: |
+          cd baseline
+          bun install --frozen-lockfile
+          git apply --whitespace=nowarn /tmp/validated-stack.patch
+          cd ..
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build deterministic harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              if curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run incremental paired benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --repeats 3 \
+            --frames 16 \
+            --warmup-frames 10 \
+            --profile-frames 8
+
+      - name: Compare deterministic screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Publish summary
+        if: always()
+        run: |
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload result and exact source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: path-core-output-stack-${{ github.sha }}
+          path: |
+            perf-results
+            src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
