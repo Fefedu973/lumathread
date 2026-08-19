@@ -1,0 +1,63 @@
+--- a/src/rendering/shaders.ts
++++ b/src/rendering/shaders.ts
+@@ -1222,6 +1222,7 @@
+ uniform vec2 uCanvasResolution;
+ uniform float uSupportRadiusPositivePx;
+ uniform float uSupportRadiusNegativePx;
++uniform float uSupportRadiusBasePx;
+ uniform sampler2D uPalette;
+ uniform sampler2D uProfiles;
+ uniform mat3 uHueMatrix;
+@@ -1473,8 +1474,25 @@
+   vec2 tangentPx = directionPx / max(length(directionPx), 0.0001);
+   vec2 normalPx = vec2(-tangentPx.y, tangentPx.x);
+   vec2 sourcePx = mix(startPx, endPx, sourceParameter);
+-  float positiveRadius = max(uSupportRadiusPositivePx, 1.0);
+-  float negativeRadius = max(uSupportRadiusNegativePx, 1.0);
++  float sourceSupportCommon = uSupportRadiusBasePx * widthScale * glowScale;
++  float positiveRadius = min(
++    max(uSupportRadiusPositivePx, 1.0),
++    max(
++      sourceSupportCommon
++        * max(uUpperGlowSpread * upperGlowSpreadScale, 0.02)
++        + 2.0,
++      1.0
++    )
++  );
++  float negativeRadius = min(
++    max(uSupportRadiusNegativePx, 1.0),
++    max(
++      sourceSupportCommon
++        * max(uLowerGlowSpread * lowerGlowSpreadScale, 0.02)
++        + 2.0,
++      1.0
++    )
++  );
+   float alongRadius = max(positiveRadius, negativeRadius);
+   float acrossRadius = aCorner.y > 0.0
+     ? positiveRadius
+--- a/src/rendering/webgl-resources.ts
++++ b/src/rendering/webgl-resources.ts
+@@ -220,6 +220,7 @@
+   "uCanvasResolution",
+   "uSupportRadiusPositivePx",
+   "uSupportRadiusNegativePx",
++  "uSupportRadiusBasePx",
+   "uPalette",
+   "uK0Lut",
+   "uProfiles",
+--- a/src/runtime/path-renderer.ts
++++ b/src/runtime/path-renderer.ts
+@@ -159,6 +159,12 @@
+     );
+     uniform1f(exactGl, bundle, "uSupportRadiusPositivePx", positiveRadius);
+     uniform1f(exactGl, bundle, "uSupportRadiusNegativePx", negativeRadius);
++    uniform1f(
++      exactGl,
++      bundle,
++      "uSupportRadiusBasePx",
++      profileRadius * Math.max(settings.glow, 0.02) * passHeight,
++    );
+     if (pass === HERO_PATH_PASS_FAR) {
+       exactGl.uniform4f(bundle.uniforms.uLayerMask0 ?? null, 1, 1, 1, 0);
+       exactGl.uniform2f(bundle.uniforms.uLayerMask1 ?? null, 0, 0);
