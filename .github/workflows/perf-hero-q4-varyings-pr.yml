@@ -63,20 +63,20 @@ jobs:
               "0.00010000",
           )
           source = source.replace(
-              "    for (const bundle of resources.sourceIntegralPrograms) {\\n"
-              "      exactGl.deleteProgram(bundle.program);\\n"
-              "    }",
-              "    for (const program of resources.sourceIntegralPrograms) {\\n"
-              "      exactGl.deleteProgram(program.program);\\n"
-              "    }",
+              '''    for (const bundle of resources.sourceIntegralPrograms) {
+                exactGl.deleteProgram(bundle.program);
+              }''',
+              '''    for (const program of resources.sourceIntegralPrograms) {
+                exactGl.deleteProgram(program.program);
+              }''',
           )
           source = source.replace(
-              "      for (const bundle of sourceIntegralPrograms) {\\n"
-              "        exactGl.deleteProgram(bundle.program);\\n"
-              "      }",
-              "      for (const program of sourceIntegralPrograms) {\\n"
-              "        exactGl.deleteProgram(program.program);\\n"
-              "      }",
+              '''      for (const bundle of sourceIntegralPrograms) {
+                exactGl.deleteProgram(bundle.program);
+              }''',
+              '''      for (const program of sourceIntegralPrograms) {
+                exactGl.deleteProgram(program.program);
+              }''',
           )
           path.write_text(source, encoding="utf-8")
           PY
