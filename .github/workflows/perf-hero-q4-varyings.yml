@@ -65,6 +65,18 @@ jobs:
           path.write_text(source, encoding="utf-8")
           PY
           node perf/scripts/apply-hero-q4-varying-experiment.mjs
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/rendering/shaders.ts")
+          source = path.read_text(encoding="utf-8")
+          needle = "\\`"
+          count = source.count(needle)
+          if count != 4:
+              raise SystemExit(
+                  f"expected exactly four escaped generated shader delimiters, found {count}"
+              )
+          path.write_text(source.replace(needle, "`"), encoding="utf-8")
+          PY
           bunx biome format --write \
             src/rendering/shaders.ts \
             src/rendering/webgl-resources.ts \
