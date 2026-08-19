@@ -74,6 +74,9 @@ jobs:
             src/runtime/draw-common.ts \
             perf/harness/gl-profiler.js \
             perf/scripts/benchmark-core.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/evaluate-major-target.mjs \
             perf/scripts/apply-benchmark-reliability-fixes.mjs
           bun run check
           bun run build
