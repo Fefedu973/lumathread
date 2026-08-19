@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - perf/major-2x-single-frame-matrix
+  pull_request:
+    branches:
+      - perf/major-2x-specializations
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: major-single-frame-${{ github.ref }}
+  group: major-single-frame-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
