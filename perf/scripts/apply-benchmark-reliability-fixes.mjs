@@ -77,7 +77,10 @@ await replaceOnce(
 const corePath = "perf/scripts/benchmark-core.mjs";
 const coreSource = await readFile(corePath, "utf8");
 const chromeStart = coreSource.indexOf("async function startChrome() {");
-const chromeEnd = coreSource.indexOf("\nasync function createTarget", chromeStart);
+const chromeEnd = coreSource.indexOf(
+  "\nasync function createTarget",
+  chromeStart,
+);
 if (chromeStart < 0 || chromeEnd < 0) {
   throw new Error("Unable to locate startChrome in benchmark-core.mjs");
 }
