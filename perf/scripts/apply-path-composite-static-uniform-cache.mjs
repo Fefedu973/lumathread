@@ -15,8 +15,7 @@ async function replaceOnce(path, before, after, label = before.slice(0, 80)) {
 
 const path = "src/runtime/path-renderer.ts";
 let source = await readFile(path, "utf8");
-const integralDeclaration =
-  `  const integralStaticUniformKeys = new WeakMap<ProgramBundle, string>();\n`;
+const integralDeclaration = `  const integralStaticUniformKeys = new WeakMap<ProgramBundle, string>();\n`;
 if (source.includes(integralDeclaration)) {
   if (source.split(integralDeclaration).length - 1 !== 1) {
     throw new Error("Non-unique integral static uniform declaration");
