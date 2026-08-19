@@ -46,7 +46,7 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Fetch exact q4 support assets
+      - name: Fetch exact q4-support assets
         run: |
           git fetch origin \
             perf/major-2x-local-support-bounds:refs/remotes/origin/perf/major-2x-local-support-bounds
@@ -64,6 +64,8 @@ jobs:
             > /tmp/major.patch
 
       - name: Apply q4 support with candidate padding
+        env:
+          SUPPORT_PADDING: ${{ matrix.padding }}
         run: |
           git apply --whitespace=nowarn /tmp/major.patch
           python - <<'PY'
@@ -85,18 +87,27 @@ jobs:
           path.write_text(source, encoding="utf-8")
           PY
           git apply --whitespace=nowarn /tmp/local-support-bounds.patch
-          PADDING="${{ matrix.padding }}" python - <<'PY'
+          python - <<'PY'
           import os
           from pathlib import Path
+
           path = Path("src/rendering/shaders.ts")
           source = path.read_text(encoding="utf-8")
+          start = source.index("  float positiveRadius = min(")
+          end = source.index("  float alongRadius =", start)
+          support_block = source[start:end]
           old = "+ 2.0,"
-          count = source.count(old)
+          count = support_block.count(old)
           if count != 2:
-              raise SystemExit(f"expected exactly two support-padding anchors, found {count}")
-          padding = float(os.environ["PADDING"])
-          source = source.replace(old, f"+ {padding:.1f},")
-          path.write_text(source, encoding="utf-8")
+              raise SystemExit(
+                  f"expected exactly two padding terms inside source support block, found {count}"
+              )
+          padding = float(os.environ["SUPPORT_PADDING"])
+          support_block = support_block.replace(old, f"+ {padding:.1f},")
+          path.write_text(
+              source[:start] + support_block + source[end:],
+              encoding="utf-8",
+          )
           PY
           node /tmp/apply-benchmark-reliability-fixes.mjs
           node /tmp/apply-single-frame-paired-harness-fix.mjs
@@ -115,8 +126,7 @@ jobs:
             perf/harness/gl-profiler.js \
             perf/scripts/benchmark-core.mjs \
             perf/scripts/benchmark-suite.mjs \
-            perf/scripts/benchmark.mjs \
-            perf/scripts/evaluate-major-target.mjs
+            perf/scripts/benchmark.mjs
           bun run check
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
@@ -127,12 +137,11 @@ jobs:
           ref: b3c926b88b4861d851075015c141c67f225517fb
           path: baseline
 
-      - name: Install baseline dependencies
-        working-directory: baseline
-        run: bun install --frozen-lockfile
-
-      - name: Apply unmodified q4 support to incremental baseline
+      - name: Install and apply unmodified q4 support to baseline
         run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
           git -C baseline apply --whitespace=nowarn /tmp/major.patch
           python - <<'PY'
           from pathlib import Path
@@ -158,10 +167,7 @@ jobs:
           cp -R perf/harness baseline/perf/harness
           cp vite.perf.config.ts baseline/vite.perf.config.ts
           cp tsconfig.perf.json baseline/tsconfig.perf.json
-
-      - name: Format and validate optimized baseline
-        working-directory: baseline
-        run: |
+          cd baseline
           bunx biome format --write \
             src/rendering/profile-textures.ts \
             src/rendering/shaders.ts \
@@ -209,9 +215,9 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
             --focus cta \
-            --repeats 1 \
-            --frames 6 \
-            --warmup-frames 4 \
+            --repeats 2 \
+            --frames 8 \
+            --warmup-frames 5 \
             --profile-frames 5
 
       - name: Prove exactly one full renderer frame per sample
@@ -240,7 +246,10 @@ jobs:
                               f"{name}/{build}/{index}/finish: expected 1, got {finish}"
                           )
           Path("perf-results/single-frame-validation.json").write_text(
-              json.dumps({"passed": not failures, "checks": checks, "failures": failures}, indent=2) + "\n"
+              json.dumps(
+                  {"passed": not failures, "checks": checks, "failures": failures},
+                  indent=2,
+              ) + "\n"
           )
           if failures:
               raise SystemExit("\n".join(failures))
