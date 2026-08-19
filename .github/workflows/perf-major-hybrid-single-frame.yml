@@ -1,0 +1,299 @@
+name: CTA hybrid halo ribbon single-frame matrix
+
+on:
+  push:
+    branches:
+      - perf/major-2x-hybrid-single-frame
+  pull_request:
+    branches:
+      - perf/major-2x-single-frame-matrix
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hybrid-single-frame-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: hybrid scale ${{ matrix.scale }} packed ${{ matrix.packed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ["0.90", "1.00", "1.10"]
+        packed: [false, true]
+
+    steps:
+      - name: Check out hybrid branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Fetch exact experiment assets
+        run: |
+          git fetch origin \
+            perf/major-2x-analytic-ribbon:refs/remotes/origin/perf/major-2x-analytic-ribbon \
+            perf/major-2x-local-support-bounds:refs/remotes/origin/perf/major-2x-local-support-bounds \
+            perf/major-2x-packed-kernel-lut:refs/remotes/origin/perf/major-2x-packed-kernel-lut
+          git show \
+            origin/perf/major-2x-analytic-ribbon:perf/experiments/analytic-ribbon.patch.gz.b64 \
+            > /tmp/analytic-ribbon.patch.gz.b64
+          git show \
+            origin/perf/major-2x-local-support-bounds:perf/scripts/apply-benchmark-reliability-fixes.mjs \
+            > /tmp/apply-benchmark-reliability-fixes.mjs
+          git show \
+            origin/perf/major-2x-local-support-bounds:perf/scripts/apply-single-frame-paired-harness-fix.mjs \
+            > /tmp/apply-single-frame-paired-harness-fix.mjs
+          git show \
+            origin/perf/major-2x-local-support-bounds:perf/experiments/local-support-bounds.patch \
+            > /tmp/local-support-bounds.patch
+          git show \
+            origin/perf/major-2x-packed-kernel-lut:perf/experiments/apply-packed-kernel-lut-experiment.mjs.txt \
+            > /tmp/apply-packed-kernel-lut-experiment.mjs
+
+      - name: Apply hybrid exact-core candidate
+        shell: bash
+        run: |
+          cat perf/experiments/major-2x-specializations.patch.gz.b64.* \
+            | tr -d "\n" \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/major.patch
+          git apply --whitespace=nowarn /tmp/major.patch
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src/runtime/path-renderer.ts")
+          source = path.read_text(encoding="utf-8")
+          old = "useSourceInstancedQuadrature"
+          new = "shouldUseSourceInstancedQuadrature"
+          if source.count(old) != 2:
+              raise SystemExit("unexpected source-instanced helper count")
+          source = source.replace(old, new)
+          threshold = "settings.headTaper <= 0.000001"
+          if source.count(threshold) != 1:
+              raise SystemExit("unexpected normalized taper threshold count")
+          source = source.replace(threshold, "settings.headTaper <= 0.001001")
+          path.write_text(source, encoding="utf-8")
+          PY
+          tr -d "\n" < /tmp/analytic-ribbon.patch.gz.b64 \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/analytic-ribbon.patch
+          git apply --whitespace=nowarn /tmp/analytic-ribbon.patch
+          SCALE="${{ matrix.scale }}" python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          shader_path = Path("src/rendering/shaders.ts")
+          shader = shader_path.read_text(encoding="utf-8")
+          old = "return exp(-coefficient * radius / safeSpread);"
+          new = f"return {os.environ['SCALE']} * exp(-coefficient * radius / safeSpread);"
+          if shader.count(old) != 1:
+              raise SystemExit("unexpected analytic scale anchor")
+          shader_path.write_text(shader.replace(old, new), encoding="utf-8")
+
+          path = Path("src/runtime/path-renderer.ts")
+          source = path.read_text(encoding="utf-8")
+          pattern = re.compile(
+              r"const sourceInstanced = shouldUseSourceInstancedQuadrature\(\s*"
+              r"entry\.settings,?\s*\);"
+          )
+          replacement = (
+              "const sourceInstanced =\n"
+              "          pass < HERO_PATH_PASS_CORE &&\n"
+              "          shouldUseSourceInstancedQuadrature(entry.settings);"
+          )
+          source, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise SystemExit(f"unexpected source selection anchor: {count}")
+          path.write_text(source, encoding="utf-8")
+          PY
+          git apply --whitespace=nowarn /tmp/local-support-bounds.patch
+          if [[ "${{ matrix.packed }}" == "true" ]]; then
+            node /tmp/apply-packed-kernel-lut-experiment.mjs 8192
+          fi
+          node /tmp/apply-benchmark-reliability-fixes.mjs
+          node /tmp/apply-single-frame-paired-harness-fix.mjs
+
+      - name: Format and validate candidate
+        run: |
+          bunx biome format --write \
+            src/rendering/profile-textures.ts \
+            src/rendering/shaders.ts \
+            src/rendering/webgl-resources.ts \
+            src/runtime/path-renderer.ts \
+            src/runtime/use-hero-wave-renderer.ts \
+            src/runtime/glass-terrain-renderer.ts \
+            src/runtime/resource-manager.ts \
+            src/runtime/draw-common.ts \
+            perf/harness/gl-profiler.js \
+            perf/scripts/benchmark-core.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/evaluate-major-target.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out exact current baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install and patch baseline benchmark hook
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          node /tmp/apply-single-frame-paired-harness-fix.mjs baseline
+
+      - name: Inject identical reliable harness into baseline
+        run: |
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build baseline and candidate harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual diff dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 80); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run paired CTA candidate benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --focus cta \
+            --repeats 1 \
+            --frames 5 \
+            --warmup-frames 3 \
+            --profile-frames 4
+
+      - name: Prove exactly one full renderer frame per sample
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("perf-results/benchmark.json").read_text())
+          failures = []
+          checks = 0
+          for scenario in report.get("scenarios", []):
+              name = scenario.get("name", "unknown")
+              for build in ("baseline", "candidate"):
+                  for index, run in enumerate(scenario.get("raw", {}).get(build, [])):
+                      stages = run.get("gpu", {}).get("byStage", {})
+                      for stage in ("path-composite", "glass-composite"):
+                          value = stages.get(stage, {}).get("countPerFrame")
+                          checks += 1
+                          if value is None or abs(value - 1) > 1e-9:
+                              failures.append(
+                                  f"{name}/{build}/{index}/{stage}: expected 1, got {value}"
+                              )
+                      finish = run.get("glPerFrame", {}).get("finish")
+                      if finish is None or abs(finish - 1) > 1e-9:
+                          failures.append(
+                              f"{name}/{build}/{index}/finish: expected 1, got {finish}"
+                          )
+          Path("perf-results/single-frame-validation.json").write_text(
+              json.dumps({"passed": not failures, "checks": checks, "failures": failures}, indent=2) + "\n"
+          )
+          if failures:
+              raise SystemExit("\n".join(failures))
+          print(f"Validated {checks} full-frame stage counters.")
+          PY
+
+      - name: Compare deterministic CTA screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate target progress
+        if: always()
+        run: |
+          if [ -f perf-results/benchmark.json ]; then
+            node perf/scripts/evaluate-major-target.mjs \
+              --input perf-results/benchmark.json \
+              --output perf-results/major-target-evaluation.json \
+              --markdown perf-results/major-target-evaluation.md \
+              --target-ratio 0.5 \
+              --maximum-regression 0.02
+          fi
+
+      - name: Publish summary
+        if: always()
+        run: |
+          printf '## hybrid scale %s packed %s\n\n' \
+            "${{ matrix.scale }}" "${{ matrix.packed }}" >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/major-target-evaluation.md || cat perf-results/major-target-evaluation.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload exact candidate and measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hybrid-${{ matrix.scale }}-packed-${{ matrix.packed }}-${{ github.sha }}
+          path: |
+            perf-results
+            src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
