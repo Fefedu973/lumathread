@@ -59,7 +59,18 @@ jobs:
           count = source.count(old)
           if count != 2:
               raise SystemExit(f"expected exactly 2 helper occurrences, found {count}")
-          path.write_text(source.replace(old, new), encoding="utf-8")
+          source = source.replace(old, new)
+          threshold_old = "settings.headTaper <= 0.000001"
+          threshold_new = "settings.headTaper <= 0.001001"
+          threshold_count = source.count(threshold_old)
+          if threshold_count != 1:
+              raise SystemExit(
+                  f"expected one normalized head-taper threshold, found {threshold_count}"
+              )
+          path.write_text(
+              source.replace(threshold_old, threshold_new),
+              encoding="utf-8",
+          )
           PY
           git fetch origin perf/major-2x-local-support-bounds --depth=1
           git show FETCH_HEAD:perf/scripts/apply-benchmark-reliability-fixes.mjs \
