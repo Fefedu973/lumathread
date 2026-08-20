@@ -44,10 +44,11 @@ jobs:
           mkdir -p /tmp/final-evidence
           gh run download 32371973397 \
             --repo "$GITHUB_REPOSITORY" \
-            --pattern 'cta-temporal-10hz-*' \
+            --pattern 'cta-rate-selection-*' \
             --dir /tmp/final-evidence
           source_dir=$(find /tmp/final-evidence \
-            -type d -path '*/candidate/materialized-src' -print -quit)
+            -type d -path '*/cta-temporal-10hz-*/candidate/materialized-src' \
+            -print -quit)
           test -n "$source_dir"
           test -f "$source_dir/runtime/path-renderer.ts"
           test -f "$source_dir/rendering/shaders.ts"
@@ -56,12 +57,13 @@ jobs:
 
       - name: Verify exact selected source tree
         run: |
-          actual=$(find src -type f -print0 \
+          actual=$(cd src \
+            && find . -type f -print0 \
             | sort -z \
             | xargs -0 sha256sum \
             | sha256sum \
             | cut -d' ' -f1)
-          expected='ac10817618afc411c2ac2c03fe6b02a3f4050f2bce6fee2a8e5faaee0bb72f61'
+          expected='205dfcef3e5f73dd8e0dd27bafadf12a04f6ee244587616d42c82ab3dbd91728'
           printf 'actual=%s\nexpected=%s\n' "$actual" "$expected"
           test "$actual" = "$expected"
 
