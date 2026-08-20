@@ -4,40 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import statistics
 from pathlib import Path
 from typing import Any
-
-WALL_RATIO_KEYS = (
-    "pairedWallRatio",
-    "wallRatio",
-    "candidateToBaselineRatio",
-    "candidateBaselineWallRatio",
-)
-GPU_RATIO_KEYS = (
-    "pairedGpuRatio",
-    "gpuRatio",
-    "candidateToBaselineGpuRatio",
-    "candidateBaselineGpuRatio",
-)
-WALL_VALUE_KEYS = (
-    "medianWallMs",
-    "meanWallMs",
-    "wallMs",
-    "frameWallMs",
-    "medianMs",
-    "meanMs",
-)
-GPU_VALUE_KEYS = (
-    "medianGpuMs",
-    "meanGpuMs",
-    "gpuMs",
-    "gpuDurationMs",
-    "totalGpuMs",
-    "drainedGpuMs",
-)
-LABEL_KEYS = ("scenario", "name", "id", "label", "title")
-SCENARIO_WORDS = ("hero", "cta", "desktop", "mobile", "dark", "light", "dpr")
 
 
 def finite_number(value: Any) -> float | None:
@@ -48,72 +16,21 @@ def finite_number(value: Any) -> float | None:
     return None
 
 
-def first_number(value: Any, keys: tuple[str, ...]) -> float | None:
-    if not isinstance(value, dict):
-        return None
+def nested_number(value: Any, *keys: str) -> float | None:
+    current = value
     for key in keys:
-        number = finite_number(value.get(key))
-        if number is not None:
-            return number
-    return None
-
-
-def label_for(value: dict[str, Any], path: str) -> str:
-    for key in LABEL_KEYS:
-        label = value.get(key)
-        if isinstance(label, str) and label.strip():
-            return label.strip()
-    return path
-
-
-def nested_ratio(value: dict[str, Any], keys: tuple[str, ...]) -> float | None:
-    baseline = value.get("baseline")
-    candidate = value.get("candidate")
-    if not isinstance(baseline, dict) or not isinstance(candidate, dict):
-        return None
-    baseline_value = first_number(baseline, keys)
-    candidate_value = first_number(candidate, keys)
-    if baseline_value is None or candidate_value is None or baseline_value <= 0:
-        return None
-    return candidate_value / baseline_value
-
-
-def walk(
-    value: Any,
-    path: str,
-    records: list[dict[str, Any]],
-) -> None:
-    if isinstance(value, list):
-        for index, child in enumerate(value):
-            walk(child, f"{path}[{index}]", records)
-        return
-    if not isinstance(value, dict):
-        return
-
-    label = label_for(value, path)
-    wall_ratio = first_number(value, WALL_RATIO_KEYS)
-    gpu_ratio = first_number(value, GPU_RATIO_KEYS)
-    if wall_ratio is None:
-        wall_ratio = nested_ratio(value, WALL_VALUE_KEYS)
-    if gpu_ratio is None:
-        gpu_ratio = nested_ratio(value, GPU_VALUE_KEYS)
-
-    if wall_ratio is not None or gpu_ratio is not None:
-        records.append(
-            {
-                "label": label,
-                "path": path,
-                "wallRatio": wall_ratio,
-                "gpuRatio": gpu_ratio,
-            }
-        )
-
-    for key, child in value.items():
-        walk(child, f"{path}.{key}", records)
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return finite_number(current)
 
 
 def geometric_mean(values: list[float]) -> float:
     return math.exp(sum(math.log(value) for value in values) / len(values))
+
+
+def median_value(side: Any, metric: str) -> float | None:
+    return nested_number(side, metric, "median")
 
 
 def main() -> int:
@@ -128,48 +45,60 @@ def main() -> int:
     args = parser.parse_args()
 
     report = json.loads(Path(args.input).read_text(encoding="utf-8"))
-    raw_records: list[dict[str, Any]] = []
-    walk(report, "root", raw_records)
+    raw_scenarios = report.get("scenarios")
+    if not isinstance(raw_scenarios, list):
+        raise RuntimeError("Fail-closed: benchmark report has no scenarios array.")
 
-    scenario_records = [
-        record
-        for record in raw_records
-        if any(
-            word in f"{record['label']} {record['path']}".lower()
-            for word in SCENARIO_WORDS
-        )
-    ]
-    if not scenario_records:
-        scenario_records = raw_records
-
-    grouped: dict[str, dict[str, list[float]]] = {}
-    for record in scenario_records:
-        bucket = grouped.setdefault(record["label"], {"wall": [], "gpu": []})
-        wall = finite_number(record.get("wallRatio"))
-        gpu = finite_number(record.get("gpuRatio"))
-        if wall is not None and wall > 0:
-            bucket["wall"].append(wall)
-        if gpu is not None and gpu > 0:
-            bucket["gpu"].append(gpu)
-
-    scenarios = []
-    for label, values in grouped.items():
-        wall = statistics.median(values["wall"]) if values["wall"] else None
-        gpu = statistics.median(values["gpu"]) if values["gpu"] else None
-        if wall is None and gpu is None:
+    scenarios: list[dict[str, Any]] = []
+    for index, scenario in enumerate(raw_scenarios):
+        if not isinstance(scenario, dict):
             continue
-        scenarios.append({"label": label, "wallRatio": wall, "gpuRatio": gpu})
+        label = scenario.get("name") or scenario.get("scenario") or f"scenario-{index}"
+        paired = scenario.get("paired")
+        if not isinstance(paired, dict):
+            continue
+        wall_ratio = nested_number(paired, "wallMeanMs", "geometricMeanRatio")
+        gpu_ratio = nested_number(
+            paired,
+            "gpuTotalFrameMs",
+            "geometricMeanRatio",
+        )
+        baseline = scenario.get("baseline") if isinstance(scenario.get("baseline"), dict) else {}
+        candidate = scenario.get("candidate") if isinstance(scenario.get("candidate"), dict) else {}
+        baseline_wall = median_value(baseline, "wallMeanMs")
+        candidate_wall = median_value(candidate, "wallMeanMs")
+        baseline_gpu = median_value(baseline, "gpuTotalFrameMs")
+        candidate_gpu = median_value(candidate, "gpuTotalFrameMs")
+        scenarios.append(
+            {
+                "label": str(label),
+                "wallRatio": wall_ratio,
+                "gpuRatio": gpu_ratio,
+                "baselineWallMs": baseline_wall,
+                "candidateWallMs": candidate_wall,
+                "baselineGpuMs": baseline_gpu,
+                "candidateGpuMs": candidate_gpu,
+            }
+        )
 
-    wall_values = [row["wallRatio"] for row in scenarios if row["wallRatio"]]
-    gpu_values = [row["gpuRatio"] for row in scenarios if row["gpuRatio"]]
+    wall_values = [
+        row["wallRatio"]
+        for row in scenarios
+        if isinstance(row.get("wallRatio"), (int, float)) and row["wallRatio"] > 0
+    ]
+    gpu_values = [
+        row["gpuRatio"]
+        for row in scenarios
+        if isinstance(row.get("gpuRatio"), (int, float)) and row["gpuRatio"] > 0
+    ]
     if len(wall_values) < args.minimum_scenarios:
         raise RuntimeError(
-            f"Fail-closed: only {len(wall_values)} scenario wall ratios were recognized; "
+            f"Fail-closed: only {len(wall_values)} paired scenario wall ratios were recognized; "
             f"{args.minimum_scenarios} are required."
         )
     if len(gpu_values) < args.minimum_gpu_scenarios:
         raise RuntimeError(
-            f"Fail-closed: only {len(gpu_values)} scenario GPU ratios were recognized; "
+            f"Fail-closed: only {len(gpu_values)} paired scenario GPU ratios were recognized; "
             f"{args.minimum_gpu_scenarios} are required."
         )
 
@@ -178,6 +107,38 @@ def main() -> int:
     worst_wall = max(wall_values)
     worst_gpu = max(gpu_values)
     allowed_worst = 1 + args.maximum_regression
+
+    baseline_wall_total = sum(
+        value
+        for value in (row.get("baselineWallMs") for row in scenarios)
+        if isinstance(value, (int, float)) and value > 0
+    )
+    candidate_wall_total = sum(
+        value
+        for value in (row.get("candidateWallMs") for row in scenarios)
+        if isinstance(value, (int, float)) and value > 0
+    )
+    baseline_gpu_total = sum(
+        value
+        for value in (row.get("baselineGpuMs") for row in scenarios)
+        if isinstance(value, (int, float)) and value > 0
+    )
+    candidate_gpu_total = sum(
+        value
+        for value in (row.get("candidateGpuMs") for row in scenarios)
+        if isinstance(value, (int, float)) and value > 0
+    )
+    weighted_wall_ratio = (
+        candidate_wall_total / baseline_wall_total
+        if baseline_wall_total > 0 and candidate_wall_total > 0
+        else None
+    )
+    weighted_gpu_ratio = (
+        candidate_gpu_total / baseline_gpu_total
+        if baseline_gpu_total > 0 and candidate_gpu_total > 0
+        else None
+    )
+
     accepted = (
         wall_geometric <= args.target_ratio
         and gpu_geometric <= args.target_ratio
@@ -195,11 +156,16 @@ def main() -> int:
         "wallFpsMultiplier": 1 / wall_geometric,
         "gpuGeometricRatio": gpu_geometric,
         "gpuReduction": 1 - gpu_geometric,
+        "baselineWeightedWallRatio": weighted_wall_ratio,
+        "baselineWeightedGpuRatio": weighted_gpu_ratio,
         "worstWallRatio": worst_wall,
         "worstGpuRatio": worst_gpu,
         "scenarios": sorted(scenarios, key=lambda row: row["label"]),
     }
-    Path(args.output).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    Path(args.output).write_text(
+        json.dumps(result, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
     rows = []
     for scenario in result["scenarios"]:
@@ -219,6 +185,12 @@ def main() -> int:
             + " |"
         )
 
+    weighted_wall_text = (
+        f"{weighted_wall_ratio:.4f}" if weighted_wall_ratio is not None else "—"
+    )
+    weighted_gpu_text = (
+        f"{weighted_gpu_ratio:.4f}" if weighted_gpu_ratio is not None else "—"
+    )
     markdown = f"""# Consolidated exact renderer target
 
 - Verdict: **{'ACCEPT' if accepted else 'REJECT'}**
@@ -226,6 +198,8 @@ def main() -> int:
 - Equivalent FPS multiplier: **{1 / wall_geometric:.2f}×**
 - Geometric GPU ratio: **{gpu_geometric:.4f}**
 - GPU work reduction: **{(1 - gpu_geometric) * 100:.2f}%**
+- Baseline-time-weighted wall ratio: **{weighted_wall_text}**
+- Baseline-time-weighted GPU ratio: **{weighted_gpu_text}**
 - Worst wall ratio: **{worst_wall:.4f}**
 - Worst GPU ratio: **{worst_gpu:.4f}**
 - Required wall/GPU ratio: **≤ {args.target_ratio:.4f}**
