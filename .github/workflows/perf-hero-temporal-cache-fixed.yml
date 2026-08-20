@@ -59,6 +59,7 @@ jobs:
           node /tmp/apply-hero-temporal-interpolation-experiment.mjs
           node perf/scripts/fix-hero-temporal-cache-state.mjs
           grep -q "temporalHeroSettingsKey" src/runtime/path-renderer.ts
+          grep -q "root.quality.quadrature >= 2" src/runtime/path-renderer.ts
           grep -q "temporalSettingsKey" src/rendering/webgl-resources.ts
           bunx biome format --write \
             perf/scripts/fix-hero-temporal-cache-state.mjs \
@@ -152,14 +153,19 @@ jobs:
           report = json.loads(Path("perf-results/benchmark.json").read_text())
           wall = []
           gpu = []
-          draws = []
+          instanced_draws = []
+          query_counts = []
           rows = []
           for scenario in report.get("scenarios", []):
               paired = scenario.get("paired", {})
+              baseline = scenario.get("baseline", {})
+              candidate = scenario.get("candidate", {})
               wr = paired.get("wallMeanMs", {}).get("geometricMeanRatio")
               gr = paired.get("gpuTotalFrameMs", {}).get("geometricMeanRatio")
-              baseline_draws = scenario.get("baseline", {}).get("glPerFrame", {}).get("drawArrays", {}).get("median")
-              candidate_draws = scenario.get("candidate", {}).get("glPerFrame", {}).get("drawArrays", {}).get("median")
+              baseline_draws = baseline.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median")
+              candidate_draws = candidate.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median")
+              baseline_queries = baseline.get("gpuSampleCount", {}).get("median")
+              candidate_queries = candidate.get("gpuSampleCount", {}).get("median")
               draw_ratio = (
                   candidate_draws / baseline_draws
                   if isinstance(candidate_draws, (int, float))
@@ -167,29 +173,49 @@ jobs:
                   and baseline_draws > 0
                   else None
               )
+              query_ratio = (
+                  candidate_queries / baseline_queries
+                  if isinstance(candidate_queries, (int, float))
+                  and isinstance(baseline_queries, (int, float))
+                  and baseline_queries > 0
+                  else None
+              )
               if isinstance(wr, (int, float)) and wr > 0:
                   wall.append(wr)
               if isinstance(gr, (int, float)) and gr > 0:
                   gpu.append(gr)
               if isinstance(draw_ratio, (int, float)) and draw_ratio > 0:
-                  draws.append(draw_ratio)
+                  instanced_draws.append(draw_ratio)
+              if isinstance(query_ratio, (int, float)) and query_ratio > 0:
+                  query_counts.append(query_ratio)
               rows.append({
                   "name": scenario.get("name"),
                   "wallRatio": wr,
                   "gpuRatio": gr,
-                  "drawArraysRatio": draw_ratio,
-                  "baselineDrawArrays": baseline_draws,
-                  "candidateDrawArrays": candidate_draws,
-                  "baselineGpuByStage": scenario.get("baseline", {}).get("gpuByStage", {}),
-                  "candidateGpuByStage": scenario.get("candidate", {}).get("gpuByStage", {}),
+                  "drawArraysInstancedRatio": draw_ratio,
+                  "baselineDrawArraysInstanced": baseline_draws,
+                  "candidateDrawArraysInstanced": candidate_draws,
+                  "gpuQueryRatio": query_ratio,
+                  "baselineGpuQueries": baseline_queries,
+                  "candidateGpuQueries": candidate_queries,
+                  "baselineGpuByStage": baseline.get("gpuByStage", {}),
+                  "candidateGpuByStage": candidate.get("gpuByStage", {}),
               })
 
           geometric = lambda values: math.exp(sum(map(math.log, values)) / len(values))
+          instanced_ratio = geometric(instanced_draws) if instanced_draws else None
+          query_ratio = geometric(query_counts) if query_counts else None
           result = {
               "wallRatioVsConsolidatedStack": geometric(wall) if wall else None,
               "gpuRatioVsConsolidatedStack": geometric(gpu) if gpu else None,
-              "drawArraysRatioVsConsolidatedStack": geometric(draws) if draws else None,
-              "cacheActivated": bool(draws) and geometric(draws) < 0.95,
+              "drawArraysInstancedRatioVsConsolidatedStack": instanced_ratio,
+              "gpuQueryRatioVsConsolidatedStack": query_ratio,
+              "cacheActivated": (
+                  instanced_ratio is not None
+                  and instanced_ratio <= 0.5
+                  and query_ratio is not None
+                  and query_ratio < 0.95
+              ),
               "estimatedAdditionalPathMemoryMiBDesktop": 14.5,
               "temporalAnchorRateHz": 30,
               "scenarios": rows,
@@ -198,8 +224,12 @@ jobs:
               json.dumps(result, indent=2) + "\n"
           )
           print(json.dumps(result, indent=2))
+          if len(rows) < 4 or len(gpu) < 4:
+              raise SystemExit("Fail-closed: incomplete Hero result matrix")
           if not result["cacheActivated"]:
-              raise SystemExit("Temporal cache still did not reduce recurring draw calls")
+              raise SystemExit(
+                  "Temporal cache did not reduce instanced integration draws and GPU queries"
+              )
           PY
 
       - name: Publish summary
