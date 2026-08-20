@@ -1,0 +1,71 @@
+name: Expose CTA pointer-transition proof
+
+on:
+  pull_request:
+    branches:
+      - perf/major-2x-cta-temporal-idle
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: expose-cta-pointer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  expose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Resolve matching branch workflow run
+        id: resolve
+        run: |
+          run_id=""
+          for attempt in $(seq 1 40); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow perf-cta-temporal-pointer-proof.yml \
+              --branch perf/major-2x-cta-temporal-pointer-proof \
+              --event push \
+              --limit 20 \
+              --json databaseId,headSha \
+              --jq '.[] | select(.headSha == env.HEAD_SHA) | .databaseId' \
+              | head -n 1)
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Matching push run: $run_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Follow exact pointer-proof run
+        run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" --exit-status
+
+      - name: Download exact pointer-proof artifact
+        if: always()
+        run: |
+          mkdir -p evidence
+          gh run download "${{ steps.resolve.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'cta-temporal-pointer-proof-*' \
+            --dir evidence
+
+      - name: Publish visual and behavior verdicts
+        if: always()
+        run: |
+          visual=$(find evidence -name visual-diff.md -print -quit)
+          behavior=$(find evidence -name pointer-transition-behavior.json -print -quit)
+          metadata=$(find evidence -name pointer-transition-metadata.json -print -quit)
+          test -n "$visual" && cat "$visual" >> "$GITHUB_STEP_SUMMARY"
+          if test -n "$behavior"; then
+            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat "$behavior" >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          test -n "$metadata"
+          test -n "$visual"
+          test -n "$behavior"
