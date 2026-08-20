@@ -24,8 +24,14 @@ const format = (value, digits = 4) =>
     ? value.toFixed(digits)
     : "n/a";
 
+const readStringArgument = (name) => {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : undefined;
+};
+
 async function main() {
   const options = parseArguments(process.argv.slice(2));
+  const requestedSurface = readStringArgument("--surface");
   await mkdir(options.out, { recursive: true });
 
   const scenarios = [
@@ -87,8 +93,20 @@ async function main() {
     },
   ].filter(
     (scenario) =>
-      options.focus === "all" || scenario.scenario === options.focus,
+      (options.focus === "all" || scenario.scenario === options.focus) &&
+      (!requestedSurface || scenario.name === requestedSurface),
   );
+
+  if (scenarios.length === 0) {
+    throw new Error(
+      `No production-wall scenario matched focus=${options.focus} surface=${requestedSurface ?? "all"}.`,
+    );
+  }
+  if (requestedSurface && scenarios.length !== 1) {
+    throw new Error(
+      `Fail-closed: surface ${requestedSurface} resolved to ${scenarios.length} scenarios.`,
+    );
+  }
 
   const chrome = await startChrome();
   try {
@@ -100,7 +118,7 @@ async function main() {
         perDrawGpuQueries: false,
         terminalGlFinishPerFrame: true,
       },
-      options,
+      options: { ...options, surface: requestedSurface ?? null },
       scenarios: [],
     };
 
