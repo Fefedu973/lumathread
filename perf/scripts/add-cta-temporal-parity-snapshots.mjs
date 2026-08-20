@@ -1,10 +1,60 @@
 import { readFile, writeFile } from "node:fs/promises";
 
+async function replaceOnce(source, before, after, label) {
+  const first = source.indexOf(before);
+  if (first < 0) throw new Error(`Unable to locate ${label}.`);
+  if (source.indexOf(before, first + before.length) >= 0) {
+    throw new Error(`Expected unique ${label}.`);
+  }
+  return source.slice(0, first) + after + source.slice(first + before.length);
+}
+
 const benchmarkPath = "perf/scripts/benchmark.mjs";
+const suitePath = "perf/scripts/benchmark-suite.mjs";
 let benchmark = await readFile(benchmarkPath, "utf8");
+let suite = await readFile(suitePath, "utf8");
 const snapshotMarker = "  const allSnapshots = [\n";
 if (!benchmark.includes(snapshotMarker)) {
   throw new Error("Unable to locate benchmark snapshot matrix.");
+}
+
+if (!benchmark.includes('scenario: "cta",\n      pointer: false,')) {
+  const before = 'scenario: "cta",\n      theme:';
+  const count = benchmark.split(before).length - 1;
+  if (count < 4) {
+    throw new Error(`Expected at least four CTA matrix entries, found ${count}.`);
+  }
+  benchmark = benchmark.replaceAll(
+    before,
+    'scenario: "cta",\n      pointer: false,\n      theme:',
+  );
+}
+
+if (!suite.includes("scenario.pointer !== false")) {
+  suite = await replaceOnce(
+    suite,
+    `      await dispatchPointer(page.client, scenario.scenario, frame * 0.37);\n      await stepFrame(page.client);`,
+    `      if (scenario.pointer !== false) {\n        await dispatchPointer(page.client, scenario.scenario, frame * 0.37);\n      }\n      await stepFrame(page.client);`,
+    "single-run warmup pointer dispatch",
+  );
+  suite = await replaceOnce(
+    suite,
+    `      await dispatchPointer(\n        page.client,\n        scenario.scenario,\n        0.35 + frame * 0.61,\n      );\n      stepSamples.push(await stepFrame(page.client));`,
+    `      if (scenario.pointer !== false) {\n        await dispatchPointer(\n          page.client,\n          scenario.scenario,\n          0.35 + frame * 0.61,\n        );\n      }\n      stepSamples.push(await stepFrame(page.client));`,
+    "single-run measured pointer dispatch",
+  );
+  suite = await replaceOnce(
+    suite,
+    `        await dispatchPointer(\n          pages[build].client,\n          scenario.scenario,\n          frame * 0.37,\n        );\n        await stepFrame(pages[build].client);`,
+    `        if (scenario.pointer !== false) {\n          await dispatchPointer(\n            pages[build].client,\n            scenario.scenario,\n            frame * 0.37,\n          );\n        }\n        await stepFrame(pages[build].client);`,
+    "paired warmup pointer dispatch",
+  );
+  suite = await replaceOnce(
+    suite,
+    `        await dispatchPointer(pages[build].client, scenario.scenario, phase);\n        samples[build].push(await stepFrame(pages[build].client));`,
+    `        if (scenario.pointer !== false) {\n          await dispatchPointer(pages[build].client, scenario.scenario, phase);\n        }\n        samples[build].push(await stepFrame(pages[build].client));`,
+    "paired measured pointer dispatch",
+  );
 }
 
 const desktop = `{ width: 1600, height: 900, dpr: 1, mobile: false }`;
@@ -80,6 +130,7 @@ const entries = missing
     ([name, theme, value, viewport]) => `    {
       name: "${name}",
       scenario: "cta",
+      pointer: false,
       theme: "${theme}",
       ${value},
       viewport: ${viewport},
@@ -91,4 +142,7 @@ if (entries) {
 }
 
 await writeFile(benchmarkPath, benchmark);
-console.log(`Added ${missing.length} CTA temporal parity captures.`);
+await writeFile(suitePath, suite);
+console.log(
+  `Configured idle CTA benchmark and added ${missing.length} temporal parity captures.`,
+);
