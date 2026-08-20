@@ -90,12 +90,11 @@ done
 grep -Fq "staticCompositeProgram" src/rendering/webgl-resources.ts
 grep -Fq "staticBaseCompositeProgram" src/rendering/webgl-resources.ts
 
+# Format the complete materialized source tree. Several validated transforms
+# touch files outside the temporal path subset, and the proof must not fail on
+# unrelated formatter drift before reaching its visual/behavior gates.
 bunx biome format --write \
-  src/rendering/shaders.ts \
-  src/rendering/webgl-resources.ts \
-  src/runtime/resource-manager.ts \
-  src/runtime/draw-common.ts \
-  src/runtime/path-renderer.ts \
+  src \
   perf/scripts/complete-hero-temporal-scheduling.mjs \
   perf/scripts/apply-static-nontemporal-path-experiment.mjs
 
