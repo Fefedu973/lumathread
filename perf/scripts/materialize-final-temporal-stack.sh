@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Every transform is pinned so the benchmarked source tree is reproducible.
+# The final proof materializes this exact tree independently in both matrix jobs.
 readonly BASE_STACK_SHA="b3c926b88b4861d851075015c141c67f225517fb"
 readonly TEMPORAL_TRANSFORM_SHA="0abfb298182f20dc9d7eb49ef773334a50fe015b"
 readonly TEMPORAL_FIX_SHA="be587db834a56bc084f3ac31fb61404a23e243bf"
