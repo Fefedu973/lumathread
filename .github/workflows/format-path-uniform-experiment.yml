@@ -1,0 +1,49 @@
+name: Format path-uniform experiment sources
+
+on:
+  push:
+    branches:
+      - perf/major-2x-final-path-uniforms
+
+permissions:
+  contents: write
+
+concurrency:
+  group: format-path-uniform-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Format experiment sources
+        run: |
+          bunx biome format --write \
+            perf/scripts/apply-temporal-path-static-uniform-cache.mjs \
+            perf/scripts/add-temporal-parity-snapshots.mjs \
+            .github/workflows/perf-final-path-uniforms.yml \
+            .github/workflows/format-path-uniform-experiment.yml
+      - name: Commit formatter output
+        run: |
+          if git diff --quiet; then
+            echo "No formatter changes required."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            perf/scripts/apply-temporal-path-static-uniform-cache.mjs \
+            perf/scripts/add-temporal-parity-snapshots.mjs \
+            .github/workflows/perf-final-path-uniforms.yml \
+            .github/workflows/format-path-uniform-experiment.yml
+          git commit -m "chore: format path-uniform experiment"
+          git push origin HEAD:${{ github.ref_name }}
