@@ -47,6 +47,11 @@ export function createGlassTerrainRenderer(
     ensureGlassResources,
   } = resourceManager;
 
+  const glassStaticUniformKeys = new WeakMap<ProgramBundle, string>();
+  const compositeStaticUniformKeys = new WeakMap<ProgramBundle, string>();
+  const blurStaticUniformKeys = new WeakMap<ProgramBundle, string>();
+  const dotInteractionStaticUniformKeys = new WeakMap<ProgramBundle, string>();
+
   const updateGlassTextMask = (
     resources: GlassTextResources,
     settings: Settings,
@@ -95,7 +100,7 @@ export function createGlassTerrainRenderer(
       maskHeight,
       resourceState.dpr * maskScale,
     );
-    encodeGlassSignedDistance(
+    resources.maskBounds = encodeGlassSignedDistance(
       resources.maskCanvas,
       HERO_GLASS_SDF_RANGE_CSS_PX * resourceState.dpr * maskScale,
     );
@@ -151,6 +156,48 @@ export function createGlassTerrainRenderer(
     }
   };
 
+  const resolveGlassEffectBounds = (
+    resources: GlassTextResources,
+    settings: Settings,
+  ) => {
+    const bounds = resources.maskBounds;
+    if (!bounds || resources.maskWidth <= 0 || resources.maskHeight <= 0) {
+      return null;
+    }
+    const scaleX = resourceState.canvasWidth / resources.maskWidth;
+    const scaleY = resourceState.canvasHeight / resources.maskHeight;
+    const sampleReach = Math.ceil(
+      Math.max(scaleX, scaleY) * (2 + Math.max(settings.glassText.bevel, 0)),
+    );
+    const sparkleReach =
+      settings.glassText.twinkle > 0.001
+        ? Math.ceil(
+            Math.max(
+              settings.glassText.twinkleSize * resourceState.dpr * 0.85,
+              6,
+            ) + 3,
+          )
+        : 0;
+    const padding = sampleReach + sparkleReach;
+    const left = Math.max(0, Math.floor(bounds.left * scaleX) - padding);
+    const top = Math.max(0, Math.floor(bounds.top * scaleY) - padding);
+    const right = Math.min(
+      resourceState.canvasWidth,
+      Math.ceil(bounds.right * scaleX) + padding,
+    );
+    const bottom = Math.min(
+      resourceState.canvasHeight,
+      Math.ceil(bounds.bottom * scaleY) + padding,
+    );
+    if (right <= left || bottom <= top) return null;
+    return {
+      x: left,
+      y: resourceState.canvasHeight - bottom,
+      width: right - left,
+      height: bottom - top,
+    };
+  };
+
   const applyDotInteractionUniforms = (
     context: WebGLRenderingContext,
     bundle: ProgramBundle,
@@ -161,7 +208,6 @@ export function createGlassTerrainRenderer(
       settings.dotsEnabled &&
       interaction.enabled &&
       pointerState.dotPointerActive;
-    const pointerColor = hexToVec3(interaction.color);
     uniform2f(
       context,
       bundle,
@@ -170,6 +216,22 @@ export function createGlassTerrainRenderer(
       pointerState.dotPointerY,
     );
     uniform1f(context, bundle, "uDotPointerActive", active ? 1 : 0);
+
+    const pointerColor = hexToVec3(interaction.color);
+    const staticKey = [
+      resourceState.dpr,
+      interaction.radius,
+      interaction.softness,
+      interaction.brightness,
+      pointerColor[0],
+      pointerColor[1],
+      pointerColor[2],
+      interaction.colorStrength,
+      interaction.magnification,
+      interaction.terrainDisplacement,
+    ].join("|");
+    if (dotInteractionStaticUniformKeys.get(bundle) === staticKey) return;
+
     uniform1f(
       context,
       bundle,
@@ -200,6 +262,7 @@ export function createGlassTerrainRenderer(
       "uTerrainPointerDisplacement",
       interaction.terrainDisplacement,
     );
+    dotInteractionStaticUniformKeys.set(bundle, staticKey);
   };
 
   const drawTerrainDots = (settings: Settings) => {
@@ -314,28 +377,13 @@ export function createGlassTerrainRenderer(
 
     const drawBlurPass = (
       source: WebGLTexture,
-      target: WebGLTexture,
+      target: WebGLFramebuffer,
       directionX: number,
       directionY: number,
     ) => {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, resources.blurFramebuffer);
-      gl.framebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0,
-        gl.TEXTURE_2D,
-        target,
-        0,
-      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, source);
-      uniform1i(gl, resources.blurProgram, "uSource", 0);
-      uniform2f(
-        gl,
-        resources.blurProgram,
-        "uResolution",
-        resources.blurWidth,
-        resources.blurHeight,
-      );
       uniform2f(
         gl,
         resources.blurProgram,
@@ -350,6 +398,18 @@ export function createGlassTerrainRenderer(
     gl.disable(gl.BLEND);
     activateProgram(resources.blurProgram.program);
     bindFullscreen(resources.blurProgram);
+    const blurStaticKey = [resources.blurWidth, resources.blurHeight].join("|");
+    if (blurStaticUniformKeys.get(resources.blurProgram) !== blurStaticKey) {
+      uniform1i(gl, resources.blurProgram, "uSource", 0);
+      uniform2f(
+        gl,
+        resources.blurProgram,
+        "uResolution",
+        resources.blurWidth,
+        resources.blurHeight,
+      );
+      blurStaticUniformKeys.set(resources.blurProgram, blurStaticKey);
+    }
     const iterations = 2 + Math.round(settings.glassText.diffusion * 2);
     const baseStep =
       0.45 +
@@ -361,13 +421,13 @@ export function createGlassTerrainRenderer(
       const step = baseStep * (1 + iteration * 0.28);
       drawBlurPass(
         source,
-        resources.blurTextures[0],
+        resources.blurFramebuffers[0],
         step / resources.blurWidth,
         0,
       );
       drawBlurPass(
         resources.blurTextures[0],
-        resources.blurTextures[1],
+        resources.blurFramebuffers[1],
         0,
         step / resources.blurHeight,
       );
@@ -383,28 +443,13 @@ export function createGlassTerrainRenderer(
     if (radiusPhysicalPx <= 0.001) return resources.effectTexture;
     const drawPass = (
       source: WebGLTexture,
-      target: WebGLTexture,
+      target: WebGLFramebuffer,
       directionX: number,
       directionY: number,
     ) => {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, resources.blurFramebuffer);
-      gl.framebufferTexture2D(
-        gl.FRAMEBUFFER,
-        gl.COLOR_ATTACHMENT0,
-        gl.TEXTURE_2D,
-        target,
-        0,
-      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, source);
-      uniform1i(gl, resources.blurProgram, "uSource", 0);
-      uniform2f(
-        gl,
-        resources.blurProgram,
-        "uResolution",
-        resources.blurWidth,
-        resources.blurHeight,
-      );
       uniform2f(
         gl,
         resources.blurProgram,
@@ -419,20 +464,69 @@ export function createGlassTerrainRenderer(
     gl.disable(gl.BLEND);
     activateProgram(resources.blurProgram.program);
     bindFullscreen(resources.blurProgram);
+    const blurStaticKey = [resources.blurWidth, resources.blurHeight].join("|");
+    if (blurStaticUniformKeys.get(resources.blurProgram) !== blurStaticKey) {
+      uniform1i(gl, resources.blurProgram, "uSource", 0);
+      uniform2f(
+        gl,
+        resources.blurProgram,
+        "uResolution",
+        resources.blurWidth,
+        resources.blurHeight,
+      );
+      blurStaticUniformKeys.set(resources.blurProgram, blurStaticKey);
+    }
     const normalizedRadius = radiusPhysicalPx * 0.55;
     drawPass(
       resources.effectTexture,
-      resources.blurTextures[0],
+      resources.blurFramebuffers[0],
       normalizedRadius / Math.max(resourceState.canvasWidth, 1),
       0,
     );
     drawPass(
       resources.blurTextures[0],
-      resources.blurTextures[1],
+      resources.blurFramebuffers[1],
       0,
       normalizedRadius / Math.max(resourceState.canvasHeight, 1),
     );
     return resources.blurTextures[1];
+  };
+
+  const isFixedDomeGlass = (settings: Settings) => {
+    const glass = settings.glassText;
+    return (
+      glass.surfaceModel === "volumetric" &&
+      glass.bevelMode === "dome" &&
+      Math.abs(glass.bevel) <= 0.000001 &&
+      Math.abs(glass.ribStrength) <= 0.000001 &&
+      Math.abs(glass.liquidStrength) <= 0.000001 &&
+      Math.abs(glass.distortion) <= 0.000001 &&
+      Math.abs(glass.roughness) <= 0.000001 &&
+      Math.abs(glass.edgeWrap) <= 0.000001 &&
+      Math.abs(glass.magnificationX) <= 0.000001 &&
+      Math.abs(glass.magnificationY) <= 0.000001 &&
+      Math.abs(glass.displacementX) <= 0.000001 &&
+      Math.abs(glass.displacementY) <= 0.000001
+    );
+  };
+
+  const isSaturatedDiffusionGlass = (settings: Settings) => {
+    const glass = settings.glassText;
+    const minimumDiffusionMix =
+      glass.diffusion * 0.58 +
+      glass.blur * 0.34 +
+      glass.frost * (0.22 + glass.roughness * 0.36);
+    return minimumDiffusionMix >= 1.000001;
+  };
+
+  const resolveGlassProgram = (
+    resources: GlassTextResources,
+    settings: Settings,
+  ) => {
+    if (!isFixedDomeGlass(settings)) return resources.program;
+    return isSaturatedDiffusionGlass(settings)
+      ? resources.fixedDomeSaturatedProgram
+      : resources.fixedDomeProgram;
   };
 
   const compositeGlassText = (settings: Settings) => {
@@ -446,7 +540,9 @@ export function createGlassTerrainRenderer(
     const introStartedAt = resourceState.glassIntroStartedAt;
     const resources = ensureGlassResources();
     if (!resources) return;
+    const glassProgram = resolveGlassProgram(resources, settings);
     updateGlassTextMask(resources, settings);
+    const effectBounds = resolveGlassEffectBounds(resources, settings);
     const introElapsedMs = Math.max(
       0,
       (getClockTime() - introStartedAt) * 1000 - settings.glassText.introDelay,
@@ -460,195 +556,223 @@ export function createGlassTerrainRenderer(
       settings.glassText.introEasing,
     );
     const blurredScene = blurGlassScene(resources, settings);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, resources.blurFramebuffer);
-    gl.framebufferTexture2D(
-      gl.FRAMEBUFFER,
-      gl.COLOR_ATTACHMENT0,
-      gl.TEXTURE_2D,
-      resources.effectTexture,
-      0,
-    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, resources.effectFramebuffer);
     gl.viewport(0, 0, resourceState.canvasWidth, resourceState.canvasHeight);
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    activateProgram(resources.program.program);
-    bindFullscreen(resources.program);
+    activateProgram(glassProgram.program);
+    bindFullscreen(glassProgram);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, resources.sceneTexture);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, resources.maskTexture);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, blurredScene);
-    uniform1i(gl, resources.program, "uScene", 0);
-    uniform1i(gl, resources.program, "uTextMask", 1);
-    uniform1i(gl, resources.program, "uBlurScene", 2);
-    uniform2f(
-      gl,
-      resources.program,
-      "uRes",
+    const glassStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
-    );
-    uniform1f(gl, resources.program, "uTime", getClockTime());
-    uniform1f(
-      gl,
-      resources.program,
-      "uRefraction",
-      settings.glassText.refraction * resourceState.dpr,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uEdgeWrap",
-      settings.glassText.edgeWrap * resourceState.dpr,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uSurfaceModel",
-      settings.glassText.surfaceModel === "volumetric" ? 1 : 0,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uBevelMode",
-      settings.glassText.bevelMode === "dome" ? 1 : 0,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uSurfaceDepth",
-      settings.glassText.surfaceDepth * resourceState.dpr,
-    );
-    uniform1f(gl, resources.program, "uIor", settings.glassText.ior);
-    uniform2f(
-      gl,
-      resources.program,
-      "uMagnification",
+      resourceState.dpr,
+      settings.glassText.refraction,
+      settings.glassText.edgeWrap,
+      settings.glassText.surfaceModel,
+      settings.glassText.bevelMode,
+      settings.glassText.surfaceDepth,
+      settings.glassText.ior,
       settings.glassText.magnificationX,
       settings.glassText.magnificationY,
-    );
-    uniform2f(
-      gl,
-      resources.program,
-      "uDisplacement",
-      settings.glassText.displacementX * resourceState.dpr,
-      settings.glassText.displacementY * resourceState.dpr,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uDiffusion",
+      settings.glassText.displacementX,
+      settings.glassText.displacementY,
       settings.glassText.diffusion,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uSdfRange",
-      HERO_GLASS_SDF_RANGE_CSS_PX * resourceState.dpr,
-    );
-    uniform1f(gl, resources.program, "uBlur", settings.glassText.blur);
-    uniform1f(
-      gl,
-      resources.program,
-      "uMicroDistortion",
+      settings.glassText.blur,
       settings.glassText.distortion,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uChromaticAberration",
-      settings.glassText.chromaticAberration * resourceState.dpr,
-    );
-    uniform1f(gl, resources.program, "uFrost", settings.glassText.frost);
-    uniform1f(
-      gl,
-      resources.program,
-      "uRoughness",
+      settings.glassText.chromaticAberration,
+      settings.glassText.frost,
       settings.glassText.roughness,
-    );
-    uniform1f(gl, resources.program, "uBevel", settings.glassText.bevel);
-    uniform1f(
-      gl,
-      resources.program,
-      "uRibStrength",
+      settings.glassText.bevel,
       settings.glassText.ribStrength,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uRibWidth",
-      settings.glassText.ribWidth * resourceState.dpr,
-    );
-    uniform1f(gl, resources.program, "uRibAngle", settings.glassText.ribAngle);
-    uniform1f(
-      gl,
-      resources.program,
-      "uLiquidStrength",
+      settings.glassText.ribWidth,
+      settings.glassText.ribAngle,
       settings.glassText.liquidStrength,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uLiquidScale",
       settings.glassText.liquidScale,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uLiquidSpeed",
       settings.glassText.liquidSpeed,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uEdgeStrength",
       settings.glassText.edgeStrength,
-    );
-    uniform1f(gl, resources.program, "uSpecular", settings.glassText.specular);
-    uniform1f(gl, resources.program, "uFresnel", settings.glassText.fresnel);
-    uniform1f(gl, resources.program, "uTwinkle", settings.glassText.twinkle);
-    uniform1f(
-      gl,
-      resources.program,
-      "uTwinkleDensity",
+      settings.glassText.specular,
+      settings.glassText.fresnel,
+      settings.glassText.twinkle,
       settings.glassText.twinkleDensity,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uTwinkleSpeed",
       settings.glassText.twinkleSpeed,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uTwinkleSize",
-      settings.glassText.twinkleSize * resourceState.dpr,
-    );
-    const tint = hexToVec3(settings.glassText.tint);
-    gl.uniform3f(resources.program.uniforms.uTint ?? null, ...tint);
-    uniform1f(
-      gl,
-      resources.program,
-      "uTintStrength",
+      settings.glassText.twinkleSize,
+      settings.glassText.tint,
       settings.glassText.tintStrength,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uSaturation",
       settings.glassText.saturation,
-    );
-    uniform1f(
-      gl,
-      resources.program,
-      "uBrightness",
       settings.glassText.brightness,
-    );
-    uniform1f(gl, resources.program, "uOpacity", settings.glassText.opacity);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+      settings.glassText.opacity,
+    ].join("|");
+    const updateGlassStaticUniforms =
+      glassStaticUniformKeys.get(glassProgram) !== glassStaticKey;
+    if (updateGlassStaticUniforms) {
+      uniform1i(gl, glassProgram, "uScene", 0);
+      uniform1i(gl, glassProgram, "uTextMask", 1);
+      uniform1i(gl, glassProgram, "uBlurScene", 2);
+      uniform2f(
+        gl,
+        glassProgram,
+        "uRes",
+        resourceState.canvasWidth,
+        resourceState.canvasHeight,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uRefraction",
+        settings.glassText.refraction * resourceState.dpr,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uEdgeWrap",
+        settings.glassText.edgeWrap * resourceState.dpr,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uSurfaceModel",
+        settings.glassText.surfaceModel === "volumetric" ? 1 : 0,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uBevelMode",
+        settings.glassText.bevelMode === "dome" ? 1 : 0,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uSurfaceDepth",
+        settings.glassText.surfaceDepth * resourceState.dpr,
+      );
+      uniform1f(gl, glassProgram, "uIor", settings.glassText.ior);
+      uniform2f(
+        gl,
+        glassProgram,
+        "uMagnification",
+        settings.glassText.magnificationX,
+        settings.glassText.magnificationY,
+      );
+      uniform2f(
+        gl,
+        glassProgram,
+        "uDisplacement",
+        settings.glassText.displacementX * resourceState.dpr,
+        settings.glassText.displacementY * resourceState.dpr,
+      );
+      uniform1f(gl, glassProgram, "uDiffusion", settings.glassText.diffusion);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uSdfRange",
+        HERO_GLASS_SDF_RANGE_CSS_PX * resourceState.dpr,
+      );
+      uniform1f(gl, glassProgram, "uBlur", settings.glassText.blur);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uMicroDistortion",
+        settings.glassText.distortion,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uChromaticAberration",
+        settings.glassText.chromaticAberration * resourceState.dpr,
+      );
+      uniform1f(gl, glassProgram, "uFrost", settings.glassText.frost);
+      uniform1f(gl, glassProgram, "uRoughness", settings.glassText.roughness);
+      uniform1f(gl, glassProgram, "uBevel", settings.glassText.bevel);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uRibStrength",
+        settings.glassText.ribStrength,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uRibWidth",
+        settings.glassText.ribWidth * resourceState.dpr,
+      );
+      uniform1f(gl, glassProgram, "uRibAngle", settings.glassText.ribAngle);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uLiquidStrength",
+        settings.glassText.liquidStrength,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uLiquidScale",
+        settings.glassText.liquidScale,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uLiquidSpeed",
+        settings.glassText.liquidSpeed,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uEdgeStrength",
+        settings.glassText.edgeStrength,
+      );
+      uniform1f(gl, glassProgram, "uSpecular", settings.glassText.specular);
+      uniform1f(gl, glassProgram, "uFresnel", settings.glassText.fresnel);
+      uniform1f(gl, glassProgram, "uTwinkle", settings.glassText.twinkle);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uTwinkleDensity",
+        settings.glassText.twinkleDensity,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uTwinkleSpeed",
+        settings.glassText.twinkleSpeed,
+      );
+      uniform1f(
+        gl,
+        glassProgram,
+        "uTwinkleSize",
+        settings.glassText.twinkleSize * resourceState.dpr,
+      );
+      const tint = hexToVec3(settings.glassText.tint);
+      gl.uniform3f(glassProgram.uniforms.uTint ?? null, ...tint);
+      uniform1f(
+        gl,
+        glassProgram,
+        "uTintStrength",
+        settings.glassText.tintStrength,
+      );
+      uniform1f(gl, glassProgram, "uSaturation", settings.glassText.saturation);
+      uniform1f(gl, glassProgram, "uBrightness", settings.glassText.brightness);
+      uniform1f(gl, glassProgram, "uOpacity", settings.glassText.opacity);
+      glassStaticUniformKeys.set(glassProgram, glassStaticKey);
+    }
+    uniform1f(gl, glassProgram, "uTime", getClockTime());
+    if (effectBounds) {
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(
+        effectBounds.x,
+        effectBounds.y,
+        effectBounds.width,
+        effectBounds.height,
+      );
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.disable(gl.SCISSOR_TEST);
+    }
 
     const introBlurPhysicalPx =
       settings.glassText.introBlur * resourceState.dpr * (1 - introProgress);
@@ -664,16 +788,29 @@ export function createGlassTerrainRenderer(
     gl.bindTexture(gl.TEXTURE_2D, resources.effectTexture);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, blurredEffect);
-    uniform1i(gl, resources.compositeProgram, "uScene", 0);
-    uniform1i(gl, resources.compositeProgram, "uEffect", 1);
-    uniform1i(gl, resources.compositeProgram, "uBlurEffect", 2);
-    uniform2f(
-      gl,
-      resources.compositeProgram,
-      "uResolution",
+    const compositeStaticKey = [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
-    );
+    ].join("|");
+    if (
+      compositeStaticUniformKeys.get(resources.compositeProgram) !==
+      compositeStaticKey
+    ) {
+      uniform1i(gl, resources.compositeProgram, "uScene", 0);
+      uniform1i(gl, resources.compositeProgram, "uEffect", 1);
+      uniform1i(gl, resources.compositeProgram, "uBlurEffect", 2);
+      uniform2f(
+        gl,
+        resources.compositeProgram,
+        "uResolution",
+        resourceState.canvasWidth,
+        resourceState.canvasHeight,
+      );
+      compositeStaticUniformKeys.set(
+        resources.compositeProgram,
+        compositeStaticKey,
+      );
+    }
     uniform1f(
       gl,
       resources.compositeProgram,

@@ -1,0 +1,72 @@
+name: Inspect final proof runs
+
+on:
+  pull_request:
+    branches:
+      - perf/visual-parity-renderer-optimization
+    types:
+      - opened
+      - reopened
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect:
+    if: github.event_name != 'pull_request' || github.head_ref == 'perf/visual-parity-renderer-final'
+    runs-on: ubuntu-latest
+    steps:
+      - name: List every final-branch workflow run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: perf/visual-parity-renderer-final
+        run: |
+          gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$BRANCH" \
+            --limit 100 \
+            --json databaseId,name,workflowName,event,status,conclusion,headSha,createdAt,url \
+            > runs.json
+          cat runs.json
+          printf '## Final branch workflow inventory\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat runs.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Locate exact direct and wall runs for the current head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          runs = json.loads(Path('runs.json').read_text())
+          head = os.environ['HEAD_SHA']
+          selected = [
+              run for run in runs
+              if run.get('headSha') == head
+              and run.get('workflowName') in {
+                  'Final materialized GPU and visual proof',
+                  'Final materialized production wall proof',
+              }
+          ]
+          Path('selected-runs.json').write_text(json.dumps(selected, indent=2) + '\n')
+          print(json.dumps({'head': head, 'selected': selected}, indent=2))
+          PY
+          printf '## Exact-head proof runs\n\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat selected-runs.json >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload workflow inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-proof-run-inventory-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            runs.json
+            selected-runs.json
+          if-no-files-found: error
+          retention-days: 30

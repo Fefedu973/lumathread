@@ -1,0 +1,86 @@
+name: Consolidated renderer preflight
+
+on:
+  push:
+    branches:
+      - perf/major-2x-final-consolidated
+    paths:
+      - .github/workflows/perf-consolidated-preflight.yml
+      - perf/scripts/materialize-validated-stack.sh
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: consolidated-preflight
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/major-2x-final-consolidated
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+
+      - name: Materialize, format and validate
+        id: validate
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            bash perf/scripts/materialize-validated-stack.sh
+            bunx biome format --write src
+            bun run check
+            bun run build
+            bunx tsc -p tsconfig.perf.json --noEmit
+          } 2>&1 | tee /tmp/preflight.log
+
+      - name: Publish preflight status
+        env:
+          OUTCOME: ${{ steps.validate.outcome }}
+          SOURCE_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rm -rf perf/latest-consolidated-preflight
+          mkdir -p perf/latest-consolidated-preflight
+          cp /tmp/preflight.log perf/latest-consolidated-preflight/preflight.log
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          Path('perf/latest-consolidated-preflight/status.json').write_text(
+              json.dumps(
+                  {
+                      'outcome': os.environ['OUTCOME'],
+                      'sourceSha': os.environ['SOURCE_SHA'],
+                      'runId': int(os.environ['RUN_ID']),
+                      'runUrl': os.environ['RUN_URL'],
+                  },
+                  indent=2,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+          git reset --hard HEAD
+          git clean -fd --exclude=perf/latest-consolidated-preflight
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -f perf/latest-consolidated-preflight
+          if ! git diff --cached --quiet; then
+            git commit -m 'perf: publish consolidated preflight [skip ci]'
+            git push origin HEAD:perf/major-2x-final-consolidated
+          fi
+
+      - name: Enforce preflight
+        if: steps.validate.outcome == 'failure'
+        run: exit 1

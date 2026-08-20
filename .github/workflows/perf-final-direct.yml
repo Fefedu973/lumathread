@@ -1,0 +1,312 @@
+name: Final materialized GPU and visual proof
+
+on:
+  push:
+    branches:
+      - perf/visual-parity-renderer-final
+    paths:
+      - src/**
+      - .github/workflows/perf-final-direct.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-materialized-direct-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ORIGINAL_SHA: 7f4289aa3ff640f479701ceec0b0d790af037692
+  SOURCE_TREE_SHA256: 205dfcef3e5f73dd8e0dd27bafadf12a04f6ee244587616d42c82ab3dbd91728
+
+jobs:
+  benchmark:
+    name: Direct ${{ matrix.focus }} proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      matrix:
+        focus: [hero, cta]
+
+    steps:
+      - name: Check out exact materialized candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: bun install --frozen-lockfile
+
+      - name: Verify source and add temporal captures
+        run: |
+          actual=$(cd src && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+          printf 'actual=%s\nexpected=%s\n' "$actual" "$SOURCE_TREE_SHA256"
+          test "$actual" = "$SOURCE_TREE_SHA256"
+          node perf/scripts/add-temporal-parity-snapshots.mjs
+          node perf/scripts/add-cta-temporal-parity-snapshots.mjs
+          bunx biome format --write \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/add-temporal-parity-snapshots.mjs \
+            perf/scripts/add-cta-temporal-parity-snapshots.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out frozen original renderer
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.ORIGINAL_SHA }}
+          path: baseline
+
+      - name: Install original and inject the identical harness
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          python perf/scripts/patch-original-debug-stepping.py baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build candidate and original harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts --outDir "$GITHUB_WORKSPACE/candidate-dist"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts --outDir "$GITHUB_WORKSPACE/baseline-dist"
+
+      - run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 --directory baseline-dist >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 --directory candidate-dist >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run direct paired benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --focus "${{ matrix.focus }}" \
+            --repeats 3 \
+            --frames 18 \
+            --warmup-frames 12 \
+            --profile-frames 8
+
+      - name: Compare deterministic captures
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate direct ratios fail-closed
+        env:
+          FOCUS: ${{ matrix.focus }}
+        run: |
+          python - <<'PY'
+          import json, math, os
+          from pathlib import Path
+
+          focus = os.environ["FOCUS"]
+          report = json.loads(Path("perf-results/benchmark.json").read_text())
+          rows = []
+          for scenario in report.get("scenarios", []):
+              paired = scenario.get("paired", {})
+              baseline = scenario.get("baseline", {})
+              candidate = scenario.get("candidate", {})
+              rows.append({
+                  "name": scenario.get("name"),
+                  "wallRatio": paired.get("wallMeanMs", {}).get("geometricMeanRatio"),
+                  "gpuRatio": paired.get("gpuTotalFrameMs", {}).get("geometricMeanRatio"),
+                  "baselineGpuMs": baseline.get("gpuTotalFrameMs", {}).get("median"),
+                  "candidateGpuMs": candidate.get("gpuTotalFrameMs", {}).get("median"),
+                  "baselineInstancedDraws": baseline.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median"),
+                  "candidateInstancedDraws": candidate.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median"),
+              })
+          if len(rows) != 4:
+              raise SystemExit(f"fail-closed: expected four {focus} scenarios, found {rows}")
+          def geometric(key):
+              values = [row[key] for row in rows]
+              if not all(isinstance(value, (int, float)) and value > 0 for value in values):
+                  raise SystemExit(f"incomplete positive {key}: {values}")
+              return math.exp(sum(math.log(value) for value in values) / len(values))
+          result = {
+              "focus": focus,
+              "wallRatio": geometric("wallRatio"),
+              "gpuRatio": geometric("gpuRatio"),
+              "worstWallRatio": max(row["wallRatio"] for row in rows),
+              "worstGpuRatio": max(row["gpuRatio"] for row in rows),
+              "scenarios": rows,
+          }
+          Path("perf-results/direct-evaluation.json").write_text(json.dumps(result, indent=2) + "\n")
+          print(json.dumps(result, indent=2))
+          if result["gpuRatio"] > 0.5 or result["worstGpuRatio"] > 0.55:
+              raise SystemExit("half-GPU target failed: " + json.dumps(result))
+          PY
+
+      - name: Upload direct evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-direct-${{ matrix.focus }}-${{ github.sha }}
+          path: perf-results
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop deterministic servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
+
+  aggregate:
+    name: Direct materialized verdict
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: final-direct-*-${{ github.sha }}
+          path: downloaded
+
+      - name: Merge reports and captures
+        run: |
+          python - <<'PY'
+          import json, shutil
+          from pathlib import Path
+
+          artifacts = sorted(Path("downloaded").glob("final-direct-*"))
+          if len(artifacts) != 2:
+              raise SystemExit(f"expected two direct artifacts, found {artifacts}")
+          out = Path("final-direct")
+          for side in ("baseline", "candidate"):
+              (out / "screenshots" / side).mkdir(parents=True, exist_ok=True)
+          rows = []
+          for artifact in artifacts:
+              evaluation = artifact / "direct-evaluation.json"
+              if not evaluation.exists():
+                  raise SystemExit(f"missing direct evaluation in {artifact}")
+              rows.extend(json.loads(evaluation.read_text())["scenarios"])
+              for side in ("baseline", "candidate"):
+                  for image in (artifact / "screenshots" / side).glob("*.png"):
+                      shutil.copy2(image, out / "screenshots" / side / image.name)
+          if len(rows) != 8:
+              raise SystemExit(f"expected eight direct scenarios, found {rows}")
+          (out / "direct-scenarios.json").write_text(json.dumps(rows, indent=2) + "\n")
+          PY
+
+      - run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Re-run combined visual gate
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline final-direct/screenshots/baseline \
+            --candidate final-direct/screenshots/candidate \
+            --out final-direct/visual
+
+      - name: Build final direct GPU report
+        run: |
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          rows = json.loads(Path("final-direct/direct-scenarios.json").read_text())
+          def geometric(key):
+              values = [row[key] for row in rows]
+              if not all(isinstance(value, (int, float)) and value > 0 for value in values):
+                  raise SystemExit(f"incomplete positive {key}: {values}")
+              return math.exp(sum(math.log(value) for value in values) / len(values))
+          gpu = geometric("gpuRatio")
+          wall = geometric("wallRatio")
+          result = {
+              "accepted": gpu <= 0.5 and max(row["gpuRatio"] for row in rows) <= 0.55,
+              "gpuRatio": gpu,
+              "gpuReductionPercent": (1 - gpu) * 100,
+              "instrumentedWallRatio": wall,
+              "instrumentedFpsMultiplier": 1 / wall,
+              "worstGpuRatio": max(row["gpuRatio"] for row in rows),
+              "worstWallRatio": max(row["wallRatio"] for row in rows),
+              "scenarios": sorted(rows, key=lambda row: row["name"]),
+          }
+          Path("final-direct/final-direct-verdict.json").write_text(json.dumps(result, indent=2) + "\n")
+          lines = [
+              "# Final materialized direct proof",
+              "",
+              f"- Verdict: **{'PASS' if result['accepted'] else 'FAIL'}**",
+              f"- GPU ratio: **{gpu:.4f}** ({result['gpuReductionPercent']:.2f}% reduction)",
+              f"- Instrumented wall ratio: **{wall:.4f}**",
+              f"- Instrumented FPS multiplier: **{1 / wall:.2f}×**",
+              f"- Worst GPU ratio: **{result['worstGpuRatio']:.4f}**",
+              f"- Worst wall ratio: **{result['worstWallRatio']:.4f}**",
+          ]
+          Path("final-direct/final-direct-verdict.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          if not result["accepted"]:
+              raise SystemExit("final materialized renderer missed the half-GPU gate")
+          PY
+
+      - name: Publish direct report
+        if: always()
+        run: |
+          test ! -f final-direct/final-direct-verdict.md || cat final-direct/final-direct-verdict.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f final-direct/visual/visual-diff.md || cat final-direct/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload combined direct proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-direct-proof-${{ github.sha }}
+          path: final-direct
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce benchmark jobs
+        if: always() && needs.benchmark.result != 'success'
+        run: exit 1
+
+      - name: Enforce combined visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
