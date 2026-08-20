@@ -265,4 +265,6 @@ await replaceOnce(
   "temporal path-composite static/dynamic uniform split",
 );
 
-console.log("Applied temporal path composite and flat-dot static uniform caches.");
+console.log(
+  "Applied temporal path composite and flat-dot static uniform caches.",
+);
