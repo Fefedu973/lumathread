@@ -1,0 +1,270 @@
+name: Shared fullscreen VAO on final renderer
+
+on:
+  push:
+    branches:
+      - perf/major-2x-fullscreen-vao
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fullscreen-vao-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 115
+
+    steps:
+      - name: Check out fullscreen-VAO candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize exact selected final stack
+        run: |
+          bash perf/scripts/materialize-final-temporal-stack.sh
+          node perf/scripts/add-temporal-parity-snapshots.mjs
+          bunx biome format --write \
+            src \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/add-temporal-parity-snapshots.mjs
+          git diff --binary \
+            b3c926b88b4861d851075015c141c67f225517fb -- src \
+            > /tmp/final-stack.patch
+          test -s /tmp/final-stack.patch
+
+      - name: Apply shared fullscreen VAO
+        run: |
+          node perf/scripts/apply-fullscreen-vao-experiment.mjs
+          grep -Fq "shared fullscreen VAO" \
+            perf/scripts/apply-fullscreen-vao-experiment.mjs
+          grep -Fq "destroyDrawController" \
+            src/runtime/use-hero-wave-renderer.ts
+          bunx biome format --write \
+            src/rendering/webgl-resources.ts \
+            src/runtime/draw-common.ts \
+            src/runtime/draw-controller.ts \
+            src/runtime/path-renderer.ts \
+            src/runtime/use-hero-wave-renderer.ts \
+            perf/scripts/apply-fullscreen-vao-experiment.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Import uninstrumented production-wall harness
+        run: |
+          readonly WALL_PROOF_SHA="f975c472d2791f27ce1f0ed9f8c40fae71cd9efe"
+          git fetch --no-tags origin "$WALL_PROOF_SHA"
+          git show "$WALL_PROOF_SHA:perf/scripts/apply-production-wall-harness.mjs" \
+            > perf/scripts/apply-production-wall-harness.mjs
+          git show "$WALL_PROOF_SHA:perf/scripts/benchmark-production-wall.mjs" \
+            > perf/scripts/benchmark-production-wall.mjs
+          node perf/scripts/apply-production-wall-harness.mjs
+          bunx biome format --write \
+            perf/harness/index.html \
+            perf/harness/gl-profiler.js \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/apply-production-wall-harness.mjs \
+            perf/scripts/benchmark-production-wall.mjs
+
+      - name: Check out identical selected final-stack baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install and materialize baseline
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          git apply --whitespace=nowarn /tmp/final-stack.patch
+          bunx biome format --write src
+          bun run check
+          bun run build
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build candidate and baseline harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual comparison dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run exact visual and GPU confirmation
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --repeats 1 \
+            --frames 4 \
+            --warmup-frames 3 \
+            --profile-frames 2
+
+      - name: Compare deterministic screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Run uninstrumented production-wall benchmark
+        run: |
+          bun perf/scripts/benchmark-production-wall.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out wall-results \
+            --repeats 2 \
+            --frames 30 \
+            --warmup-frames 16 \
+            --profile-frames 1
+
+      - name: Evaluate VAO submission gain
+        id: performance
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          benchmark = json.loads(Path("perf-results/benchmark.json").read_text())
+          wall = json.loads(Path("wall-results/production-wall.json").read_text())
+          gpu_rows = []
+          for scenario in benchmark.get("scenarios", []):
+              ratio = (
+                  scenario.get("paired", {})
+                  .get("gpuTotalFrameMs", {})
+                  .get("geometricMeanRatio")
+              )
+              gpu_rows.append({"name": scenario.get("name"), "ratio": ratio})
+          if len(gpu_rows) != 8:
+              raise SystemExit(f"fail-closed: expected eight GPU scenarios, found {gpu_rows}")
+          gpu_values = [row["ratio"] for row in gpu_rows]
+          if not all(isinstance(value, (int, float)) and value > 0 for value in gpu_values):
+              raise SystemExit(f"incomplete GPU ratios: {gpu_values}")
+          gpu_ratio = math.exp(sum(math.log(value) for value in gpu_values) / len(gpu_values))
+          verdict = wall.get("verdict", {})
+          wall_ratio = verdict.get("wallRatio")
+          submit_ratio = verdict.get("submitRatio")
+          drain_ratio = verdict.get("drainRatio")
+          if not all(
+              isinstance(value, (int, float)) and value > 0
+              for value in (wall_ratio, submit_ratio, drain_ratio)
+          ):
+              raise SystemExit(f"incomplete production-wall verdict: {verdict}")
+          result = {
+              "gpuRatioVsFinalStack": gpu_ratio,
+              "wallRatioVsFinalStack": wall_ratio,
+              "submitRatioVsFinalStack": submit_ratio,
+              "drainRatioVsFinalStack": drain_ratio,
+              "equivalentFpsMultiplier": 1 / wall_ratio,
+              "worstWallRatio": verdict.get("worstWallRatio"),
+              "gpuScenarios": gpu_rows,
+              "accepted": (
+                  gpu_ratio <= 1.02
+                  and wall_ratio <= 0.98
+                  and submit_ratio <= 0.98
+                  and verdict.get("worstWallRatio", 99) <= 1.03
+              ),
+          }
+          Path("wall-results/fullscreen-vao-evaluation.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+          print(json.dumps(result, indent=2))
+          if not result["accepted"]:
+              raise SystemExit("fullscreen VAO did not pass: " + json.dumps(result))
+          PY
+
+      - name: Publish summaries
+        if: always()
+        run: |
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f wall-results/production-wall.md || cat wall-results/production-wall.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f wall-results/fullscreen-vao-evaluation.json ]; then
+            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat wall-results/fullscreen-vao-evaluation.json >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Collect exact candidate evidence
+        if: always()
+        run: |
+          mkdir -p perf-results/candidate perf-results/server-logs
+          cp /tmp/final-stack.patch perf-results/candidate/ 2>/dev/null || true
+          cp perf/materialized-final-temporal-stack.txt perf-results/candidate/ 2>/dev/null || true
+          cp /tmp/baseline.log perf-results/server-logs/ 2>/dev/null || true
+          cp /tmp/candidate.log perf-results/server-logs/ 2>/dev/null || true
+          cp -R src perf-results/candidate/materialized-src
+
+      - name: Upload measurements and exact source
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fullscreen-vao-${{ github.sha }}
+          path: |
+            perf-results
+            wall-results
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop deterministic servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce performance gate
+        if: always() && steps.performance.outcome == 'failure'
+        run: exit 1
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
