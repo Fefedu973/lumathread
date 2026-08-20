@@ -43,6 +43,11 @@ const surfaces = [
   },
 ];
 
+const SETTLING_FRAME_COUNT = 42;
+const RECOVERY_FRAME_COUNT = 12;
+const settlingCaptureFrames = new Set([0, 1, 3, 5, 11, 23, 35, 41]);
+const recoveryCaptureFrames = new Set([0, 3, 7, 11]);
+
 async function screenshot(page, destination) {
   const result = await page.client.call("Page.captureScreenshot", {
     format: "png",
@@ -129,15 +134,31 @@ async function captureBuild(chrome, baseUrl, side, surface) {
     }
     const activeCounters = await readCounters(page);
 
-    await resetCounters(page);
+    // The CTA follow transition is configured for 0.55 seconds. The previous
+    // proof measured only the first six leave frames, so it counted the exact
+    // fallback plus the two-bank cache refill but never reached steady-state
+    // reuse. Keep visual coverage throughout the transition, then measure the
+    // recovered cache only after a conservative 0.7-second settling window.
     await leavePointer(page);
-    const leaveFrames = [];
-    for (let frame = 0; frame <= 5; frame += 1) {
-      leaveFrames.push(await stepFrame(page.client, 1 / 60));
-      if (frame === 0 || frame === 1 || frame === 3 || frame === 5) {
+    const settlingFrames = [];
+    for (let frame = 0; frame < SETTLING_FRAME_COUNT; frame += 1) {
+      settlingFrames.push(await stepFrame(page.client, 1 / 60));
+      if (settlingCaptureFrames.has(frame)) {
         await screenshot(
           page,
           path.join(directory, `${surface.name}-pointer-leave-f${frame}.png`),
+        );
+      }
+    }
+
+    await resetCounters(page);
+    const leaveFrames = [];
+    for (let frame = 0; frame < RECOVERY_FRAME_COUNT; frame += 1) {
+      leaveFrames.push(await stepFrame(page.client, 1 / 60));
+      if (recoveryCaptureFrames.has(frame)) {
+        await screenshot(
+          page,
+          path.join(directory, `${surface.name}-pointer-recovered-f${frame}.png`),
         );
       }
     }
@@ -148,7 +169,10 @@ async function captureBuild(chrome, baseUrl, side, surface) {
       surface: surface.name,
       enterFrame,
       moveFrames,
+      settlingFrames,
       leaveFrames,
+      settlingFrameCount: SETTLING_FRAME_COUNT,
+      recoveryFrameCount: RECOVERY_FRAME_COUNT,
       enterCounters,
       activeCounters,
       leaveCounters,
