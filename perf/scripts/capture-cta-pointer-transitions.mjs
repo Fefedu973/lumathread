@@ -171,9 +171,7 @@ try {
   const results = [];
   for (const surface of surfaces) {
     console.log(`Capturing pointer transitions for ${surface.name}...`);
-    results.push(
-      await captureBuild(chrome, baselineUrl, "baseline", surface),
-    );
+    results.push(await captureBuild(chrome, baselineUrl, "baseline", surface));
     results.push(
       await captureBuild(chrome, candidateUrl, "candidate", surface),
     );
