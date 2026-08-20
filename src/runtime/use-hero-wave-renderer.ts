@@ -579,6 +579,8 @@ export function useHeroWaveRenderer({
       if (
         !running ||
         frameScheduled ||
+        settings.paused ||
+        manualPausedRef.current ||
         document.visibilityState === "hidden" ||
         (settings.pauseWhenOffscreen && !inViewport)
       ) {
@@ -1111,6 +1113,10 @@ export function useHeroWaveRenderer({
     ).__waveDebug = {
       time: () => clockTime,
       step: (seconds: number) => {
+        if (frameScheduled) {
+          cancelAnimationFrame(raf);
+          frameScheduled = false;
+        }
         const safeSeconds = finite(seconds, 0);
         clockTime += safeSeconds;
         currentTimeRef.current = clockTime;

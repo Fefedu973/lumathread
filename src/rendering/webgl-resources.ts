@@ -32,10 +32,13 @@ export interface TerrainDotsResources {
 
 export interface GlassTextResources {
   program: ProgramBundle;
+  fixedDomeProgram: ProgramBundle;
+  fixedDomeSaturatedProgram: ProgramBundle;
   blurProgram: ProgramBundle;
   compositeProgram: ProgramBundle;
-  framebuffer: WebGLFramebuffer;
-  blurFramebuffer: WebGLFramebuffer;
+  sceneFramebuffer: WebGLFramebuffer;
+  effectFramebuffer: WebGLFramebuffer;
+  blurFramebuffers: [WebGLFramebuffer, WebGLFramebuffer];
   sceneTexture: WebGLTexture;
   effectTexture: WebGLTexture;
   blurTextures: [WebGLTexture, WebGLTexture];
@@ -43,6 +46,12 @@ export interface GlassTextResources {
   maskCanvas: HTMLCanvasElement;
   maskWidth: number;
   maskHeight: number;
+  maskBounds: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  } | null;
   width: number;
   height: number;
   blurWidth: number;
@@ -144,17 +153,38 @@ export const GLASS_COMPOSITE_UNIFORMS = [
 
 export interface PathResources {
   integralPrograms: [ProgramBundle, ProgramBundle, ProgramBundle];
+  sourceIntegralPrograms: [ProgramBundle, ProgramBundle, ProgramBundle];
   compositeProgram: ProgramBundle;
+  baseCompositeProgram: ProgramBundle;
+  staticCompositeProgram: ProgramBundle;
+  staticBaseCompositeProgram: ProgramBundle;
+  idleDotsProgram: ProgramBundle;
+  pointerDotsProgram: ProgramBundle;
   quadBuffer: WebGLBuffer;
   segmentBuffers: [WebGLBuffer, WebGLBuffer, WebGLBuffer];
+  sourceIntegralVaos: [
+    WebGLVertexArrayObject | null,
+    WebGLVertexArrayObject | null,
+    WebGLVertexArrayObject | null,
+  ];
+  sourceIntegralVaoKeys: [number, number, number];
   framebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
   waveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
   reflectionTextures: [WebGLTexture, WebGLTexture];
+  temporalFramebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
+  temporalWaveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
+  temporalReflectionTextures: [WebGLTexture, WebGLTexture];
   k0Texture: WebGLTexture;
   passWidths: [number, number, number];
   passHeights: [number, number, number];
   stagingData: [Float32Array, Float32Array, Float32Array];
   uploadedSceneHashes: [number, number, number];
+  temporalAnchorIndex: number;
+  temporalSettingsReference: Settings | null;
+  temporalSettingsKey: string;
+  temporalPaletteTexture: WebGLTexture | null;
+  temporalProfilesTexture: WebGLTexture | null;
+  temporalSizeRevision: number;
   targetSettingsReference: Settings | null;
   targetSizeRevision: number;
 }
@@ -217,6 +247,7 @@ export const PATH_INTEGRAL_UNIFORMS = [
   "uCanvasResolution",
   "uSupportRadiusPositivePx",
   "uSupportRadiusNegativePx",
+  "uSupportRadiusBasePx",
   "uPalette",
   "uK0Lut",
   "uProfiles",
@@ -256,6 +287,12 @@ export const PATH_INTEGRAL_COMPOSITE_UNIFORMS = [
   "uMidWave",
   "uMidReflection",
   "uCoreWave",
+  "uFarWaveNext",
+  "uFarReflectionNext",
+  "uMidWaveNext",
+  "uMidReflectionNext",
+  "uCoreWaveNext",
+  "uTemporalMix",
   "uDotMask",
   "uSpacing",
   "uDotR",
