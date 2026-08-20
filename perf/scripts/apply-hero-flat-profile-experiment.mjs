@@ -1,4 +1,6 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
+
+await rm("perf/latest-consolidated", { recursive: true, force: true });
 
 async function replaceOnce(path, before, after) {
   const source = await readFile(path, "utf8");
