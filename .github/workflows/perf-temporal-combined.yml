@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   benchmark:
+    if: github.event_name != 'pull_request' || github.head_ref == 'perf/major-2x-temporal-combined-anchors'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -39,10 +40,17 @@ jobs:
           git diff --binary b3c926b88b4861d851075015c141c67f225517fb -- src > /tmp/baseline.patch
           test -s /tmp/baseline.patch
 
-      - name: Apply sanitized combined-anchor transform
+      - name: Apply pinned sanitized combined-anchor transform
         run: |
-          tr -d '\r\n\t ' < perf/experiments/apply-temporal-combined.py.gz.b64 \
-            | base64 --decode | gzip --decompress > /tmp/apply.py
+          readonly COMBINED_TRANSFORM_SHA="0d1ee9c4c6e0228703adc97947443d67e727895b"
+          git fetch --no-tags origin "$COMBINED_TRANSFORM_SHA"
+          git show \
+            "$COMBINED_TRANSFORM_SHA:perf/experiments/apply-temporal-combined.py.gz.b64" \
+            | tr -d '\r\n\t ' \
+            | base64 --decode \
+            | gzip --decompress \
+            > /tmp/apply.py
+          test -s /tmp/apply.py
           python - <<'PY'
           from pathlib import Path
           p = Path('/tmp/apply.py')
@@ -104,8 +112,8 @@ jobs:
         run: |
           bun perf/scripts/benchmark.mjs \
             --baseline http://127.0.0.1:4173 --candidate http://127.0.0.1:4174 \
-            --out perf-results --focus hero --repeats 1 --frames 6 \
-            --warmup-frames 4 --profile-frames 4
+            --out perf-results --focus hero --repeats 2 --frames 12 \
+            --warmup-frames 8 --profile-frames 6
 
       - name: Compare captures
         id: visual
@@ -131,8 +139,12 @@ jobs:
               rows.append({'name':s.get('name'),
                 'wall':q.get('wallMeanMs',{}).get('geometricMeanRatio'),
                 'gpu':q.get('gpuTotalFrameMs',{}).get('geometricMeanRatio')})
-          geo=lambda k: math.exp(sum(math.log(x[k]) for x in rows if x[k] and x[k]>0)/len([x for x in rows if x[k] and x[k]>0]))
-          out={'wallRatio':geo('wall'),'gpuRatio':geo('gpu'),'scenarios':rows}
+          valid_wall=[x['wall'] for x in rows if isinstance(x['wall'],(int,float)) and x['wall']>0]
+          valid_gpu=[x['gpu'] for x in rows if isinstance(x['gpu'],(int,float)) and x['gpu']>0]
+          if len(rows) != 4 or len(valid_wall) != 4 or len(valid_gpu) != 4:
+              raise SystemExit(f'fail-closed: expected four complete Hero scenarios, found {rows}')
+          geo=lambda values: math.exp(sum(math.log(value) for value in values)/len(values))
+          out={'wallRatio':geo(valid_wall),'gpuRatio':geo(valid_gpu),'scenarios':rows}
           Path('perf-results/temporal-combined-evaluation.json').write_text(json.dumps(out,indent=2)+'\n')
           print(json.dumps(out,indent=2))
           PY
