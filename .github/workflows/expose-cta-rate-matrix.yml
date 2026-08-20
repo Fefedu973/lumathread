@@ -1,0 +1,128 @@
+name: Expose CTA temporal rate matrix
+
+on:
+  pull_request:
+    branches:
+      - perf/major-2x-cta-temporal-idle
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: expose-cta-rates-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  expose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Resolve matching rate-matrix run
+        id: resolve
+        run: |
+          run_id=""
+          for attempt in $(seq 1 40); do
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow perf-cta-temporal-rate-matrix.yml \
+              --branch perf/major-2x-cta-temporal-rate-matrix \
+              --event push \
+              --limit 20 \
+              --json databaseId,headSha \
+              --jq '.[] | select(.headSha == env.HEAD_SHA) | .databaseId' \
+              | head -n 1)
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Matching push run: $run_id" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Follow exact rate-matrix run
+        run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" --exit-status
+
+      - name: Download all rate artifacts
+        if: always()
+        run: |
+          mkdir -p evidence
+          gh run download "${{ steps.resolve.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'cta-temporal-*hz-*' \
+            --dir evidence
+
+      - name: Publish fail-closed rate table
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          rows = []
+          for path in Path("evidence").rglob("cta-temporal-rate-evaluation.json"):
+              payload = json.loads(path.read_text())
+              visual = next(path.parent.rglob("visual-diff.json"), None)
+              visual_payload = json.loads(visual.read_text()) if visual else None
+              rows.append({
+                  "rateHz": payload.get("rateHz"),
+                  "wallRatio": payload.get("wallRatioVsExactFinalStack"),
+                  "gpuRatio": payload.get("gpuRatioVsExactFinalStack"),
+                  "drawRatio": payload.get("drawRatio"),
+                  "worstWallRatio": payload.get("worstWallRatio"),
+                  "visualPass": bool(visual_payload and visual_payload.get("passed")),
+              })
+          if len(rows) != 4 or {row["rateHz"] for row in rows} != {8.0, 10.0, 12.0, 15.0}:
+              raise SystemExit(f"fail-closed: incomplete CTA rate evidence: {rows}")
+          rows.sort(key=lambda row: row["rateHz"])
+          safe = [
+              row for row in rows
+              if row["visualPass"]
+              and isinstance(row["wallRatio"], (int, float))
+              and isinstance(row["gpuRatio"], (int, float))
+              and isinstance(row["drawRatio"], (int, float))
+              and row["drawRatio"] <= 0.5
+              and row["worstWallRatio"] <= 1.03
+          ]
+          result = {
+              "rows": rows,
+              "selected": min(safe, key=lambda row: row["rateHz"]) if safe else None,
+          }
+          Path("cta-rate-selection.json").write_text(json.dumps(result, indent=2) + "\n")
+          lines = [
+              "# CTA temporal rate matrix",
+              "",
+              "| Rate | Wall ratio | GPU ratio | Draw ratio | Worst wall | Visual |",
+              "|---:|---:|---:|---:|---:|---|",
+          ]
+          for row in rows:
+              lines.append(
+                  f"| {row['rateHz']:.0f} Hz | {row['wallRatio']:.4f} | {row['gpuRatio']:.4f} | "
+                  f"{row['drawRatio']:.4f} | {row['worstWallRatio']:.4f} | "
+                  f"{'PASS' if row['visualPass'] else 'FAIL'} |"
+              )
+          lines.extend([
+              "",
+              f"Selected lowest safe rate: **{result['selected']['rateHz']:.0f} Hz**"
+              if result["selected"] else "No rate passed fail-closed selection.",
+          ])
+          Path("cta-rate-selection.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          if result["selected"] is None:
+              raise SystemExit("no safe CTA temporal rate")
+          PY
+          cat cta-rate-selection.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload consolidated selection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cta-rate-selection-${{ github.event.pull_request.head.sha }}
+          path: |
+            cta-rate-selection.json
+            cta-rate-selection.md
+            evidence
+          if-no-files-found: error
+          retention-days: 30
