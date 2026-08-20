@@ -1,0 +1,69 @@
+name: Prepare exact final proof workflow
+
+on:
+  push:
+    branches:
+      - perf/visual-parity-renderer-final
+    paths:
+      - .github/workflows/prepare-final-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/visual-parity-renderer-final
+          fetch-depth: 0
+
+      - name: Retarget the direct proof to the materialized source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/perf-final-temporal.yml')
+          source = path.read_text()
+          source = source.replace(
+              '      - perf/major-2x-final-temporal\n  pull_request:\n    branches:\n      - perf/major-2x-final-consolidated',
+              '      - perf/visual-parity-renderer-final\n  pull_request:\n    branches:\n      - perf/visual-parity-renderer-optimization',
+          )
+          source = source.replace(
+              '  group: final-temporal-${{ github.event.pull_request.number || github.ref }}',
+              '  group: final-materialized-${{ github.event.pull_request.number || github.ref }}',
+          )
+
+          start = source.index(
+              '      - name: Materialize consolidated CTA and temporal Hero stack\n'
+          )
+          end = source.index(
+              '      - name: Capture exact materialized candidate patch\n', start
+          )
+          replacement = '''      - name: Verify and validate exact materialized renderer\n        run: |\n          actual=$(cd src \\\n            && find . -type f -print0 \\\n            | sort -z \\\n            | xargs -0 sha256sum \\\n            | sha256sum \\\n            | cut -d' ' -f1)\n          expected='205dfcef3e5f73dd8e0dd27bafadf12a04f6ee244587616d42c82ab3dbd91728'\n          printf 'actual=%s\\nexpected=%s\\n' "$actual" "$expected"\n          test "$actual" = "$expected"\n          node perf/scripts/add-temporal-parity-snapshots.mjs\n          node perf/scripts/add-cta-temporal-parity-snapshots.mjs\n          bunx biome format --write \\\n            perf/scripts/benchmark.mjs \\\n            perf/scripts/benchmark-suite.mjs \\\n            perf/scripts/add-temporal-parity-snapshots.mjs \\\n            perf/scripts/add-cta-temporal-parity-snapshots.mjs\n          bun run check\n          bun run build\n          bunx tsc -p tsconfig.perf.json --noEmit\n\n'''
+          source = source[:start] + replacement + source[end:]
+
+          source = source.replace(
+              "      - name: Enforce direct 2x target\n        if: always() && steps.target.outcome == 'failure'\n        run: exit 1\n",
+              '''      - name: Enforce direct half-GPU production target\n        if: always()\n        run: |\n          python - <<'PY'\n          import json, math\n          from pathlib import Path\n\n          report = json.loads(Path("perf-results/benchmark.json").read_text())\n          rows = []\n          for scenario in report.get("scenarios", []):\n              ratio = scenario.get("paired", {}).get("gpuTotalFrameMs", {}).get("geometricMeanRatio")\n              rows.append({"name": scenario.get("name"), "gpuRatio": ratio})\n          if len(rows) != 8:\n              raise SystemExit(f"fail-closed: expected eight GPU scenarios, found {rows}")\n          values = [row["gpuRatio"] for row in rows]\n          if not all(isinstance(value, (int, float)) and value > 0 for value in values):\n              raise SystemExit(f"incomplete GPU ratios: {values}")\n          ratio = math.exp(sum(math.log(value) for value in values) / len(values))\n          worst = max(values)\n          result = {\n              "accepted": ratio <= 0.5 and worst <= 0.55,\n              "gpuRatio": ratio,\n              "gpuReductionPercent": (1 - ratio) * 100,\n              "worstGpuRatio": worst,\n              "scenarios": rows,\n          }\n          Path("perf-results/final-half-gpu-verdict.json").write_text(\n              json.dumps(result, indent=2) + "\\n"\n          )\n          print(json.dumps(result, indent=2))\n          if not result["accepted"]:\n              raise SystemExit("final materialized renderer missed the half-GPU gate")\n          PY\n''',
+          )
+
+          if 'perf/visual-parity-renderer-final' not in source:
+              raise SystemExit('final branch trigger was not installed')
+          if 'Verify and validate exact materialized renderer' not in source:
+              raise SystemExit('materialized source gate was not installed')
+          if 'Enforce direct half-GPU production target' not in source:
+              raise SystemExit('half-GPU gate was not installed')
+          path.write_text(source)
+          PY
+
+      - name: Commit prepared proof workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/perf-final-temporal.yml
+          git diff --cached --quiet && exit 0
+          git commit -m 'ci: prove the exact materialized renderer directly'
+          git push origin HEAD:perf/visual-parity-renderer-final
