@@ -1,4 +1,6 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
+
+await rm("perf/latest-consolidated", { recursive: true, force: true });
 
 async function replaceOnce(path, before, after) {
   const source = await readFile(path, "utf8");
@@ -61,6 +63,12 @@ await replaceOnce(
   `    resources.temporalAnchorIndex = Number.MIN_SAFE_INTEGER;\n    resources.temporalSettingsReference = null;\n    resources.temporalSettingsKey = "";\n    resources.temporalPaletteTexture = null;\n    resources.temporalProfilesTexture = null;\n    resources.temporalSizeRevision = -1;`,
 );
 
+await replaceOnce(
+  "src/runtime/path-renderer.ts",
+  `root.quality.quadrature >= 4 &&`,
+  `root.quality.quadrature >= 2 &&`,
+);
+
 console.log(
-  "Fixed Hero temporal cache invalidation with a stable render signature.",
+  "Activated the Hero temporal cache with stable invalidation for balanced and high quality.",
 );
