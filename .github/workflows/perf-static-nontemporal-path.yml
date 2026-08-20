@@ -1,0 +1,328 @@
+name: Static non-temporal path composite
+
+on:
+  push:
+    branches:
+      - perf/major-2x-static-nontemporal-composite
+  pull_request:
+    branches:
+      - perf/major-2x-production-wall-proof
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-nontemporal-path-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gpu-visual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+
+    steps:
+      - name: Check out static-composite candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize final stack and static non-temporal programs
+        run: |
+          bash perf/scripts/materialize-final-temporal-stack.sh
+          bunx biome format --write src
+          git diff --binary \
+            b3c926b88b4861d851075015c141c67f225517fb -- src \
+            > /tmp/final-temporal-stack.patch
+          test -s /tmp/final-temporal-stack.patch
+          node perf/scripts/apply-static-nontemporal-path-experiment.mjs
+          bunx biome format --write \
+            src/rendering/shaders.ts \
+            src/rendering/webgl-resources.ts \
+            src/runtime/resource-manager.ts \
+            src/runtime/draw-common.ts \
+            src/runtime/path-renderer.ts \
+            perf/scripts/apply-static-nontemporal-path-experiment.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out identical final-stack baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install and materialize baseline
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          git apply --whitespace=nowarn /tmp/final-temporal-stack.patch
+          bunx biome format --write src
+          bun run check
+          bun run build
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build deterministic harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual comparison dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run incremental CTA GPU benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --focus cta \
+            --repeats 2 \
+            --frames 12 \
+            --warmup-frames 8 \
+            --profile-frames 6
+
+      - name: Compare deterministic CTA screenshots
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate incremental GPU result
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          report_path = Path("perf-results/benchmark.json")
+          if not report_path.exists():
+              raise SystemExit("benchmark report is missing")
+          report = json.loads(report_path.read_text())
+          rows = []
+          gpu_ratios = []
+          wall_ratios = []
+          for scenario in report.get("scenarios", []):
+              paired = scenario.get("paired", {})
+              gpu = paired.get("gpuTotalFrameMs", {}).get("geometricMeanRatio")
+              wall = paired.get("wallMeanMs", {}).get("geometricMeanRatio")
+              rows.append({"name": scenario.get("name"), "gpuRatio": gpu, "wallRatio": wall})
+              if isinstance(gpu, (int, float)) and gpu > 0:
+                  gpu_ratios.append(gpu)
+              if isinstance(wall, (int, float)) and wall > 0:
+                  wall_ratios.append(wall)
+          geometric = lambda values: math.exp(sum(map(math.log, values)) / len(values))
+          result = {
+              "scenarioCount": len(rows),
+              "gpuRatioVsFinalTemporalStack": geometric(gpu_ratios) if gpu_ratios else None,
+              "wallRatioUnderProfiler": geometric(wall_ratios) if wall_ratios else None,
+              "scenarios": rows,
+          }
+          Path("perf-results/static-nontemporal-evaluation.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+          print(json.dumps(result, indent=2))
+          if len(rows) != 4 or len(gpu_ratios) != 4:
+              raise SystemExit("fail-closed: the four CTA GPU surfaces were not all measured")
+          PY
+
+      - name: Publish GPU and visual summary
+        if: always()
+        run: |
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f perf-results/static-nontemporal-evaluation.json ]; then
+            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat perf-results/static-nontemporal-evaluation.json >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload GPU, visual and source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-nontemporal-gpu-${{ github.sha }}
+          path: |
+            perf-results
+            src
+            baseline/src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
+
+  production-wall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+
+    steps:
+      - name: Check out static-composite candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize candidate and uninstrumented harness
+        run: |
+          bash perf/scripts/materialize-final-temporal-stack.sh
+          bunx biome format --write src
+          git diff --binary \
+            b3c926b88b4861d851075015c141c67f225517fb -- src \
+            > /tmp/final-temporal-stack.patch
+          test -s /tmp/final-temporal-stack.patch
+          node perf/scripts/apply-static-nontemporal-path-experiment.mjs
+          node perf/scripts/apply-production-wall-harness.mjs
+          bunx biome format --write \
+            src/rendering/shaders.ts \
+            src/rendering/webgl-resources.ts \
+            src/runtime/resource-manager.ts \
+            src/runtime/draw-common.ts \
+            src/runtime/path-renderer.ts \
+            perf/harness/index.html \
+            perf/harness/gl-profiler.js \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/benchmark-production-wall.mjs \
+            perf/scripts/apply-static-nontemporal-path-experiment.mjs
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out final-stack baseline
+        uses: actions/checkout@v4
+        with:
+          ref: b3c926b88b4861d851075015c141c67f225517fb
+          path: baseline
+
+      - name: Install and materialize baseline
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          git apply --whitespace=nowarn /tmp/final-temporal-stack.patch
+          bunx biome format --write src
+          bun run check
+          bun run build
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build uninstrumented harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run incremental CTA production-wall benchmark
+        run: |
+          bun perf/scripts/benchmark-production-wall.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --focus cta \
+            --repeats 4 \
+            --frames 60 \
+            --warmup-frames 30 \
+            --profile-frames 1
+
+      - name: Publish wall summary
+        if: always()
+        run: |
+          test ! -f perf-results/production-wall.md || cat perf-results/production-wall.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload wall and source evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-nontemporal-wall-${{ github.sha }}
+          path: |
+            perf-results
+            src
+            baseline/src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
