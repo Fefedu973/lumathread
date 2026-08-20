@@ -56,8 +56,7 @@ jobs:
             src \
             perf/scripts/benchmark.mjs \
             perf/scripts/materialize-final-temporal-stack.sh \
-            perf/scripts/add-temporal-parity-snapshots.mjs \
-            perf/scripts/evaluate-consolidated-target.py
+            perf/scripts/add-temporal-parity-snapshots.mjs
           bun run check
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
@@ -86,43 +85,13 @@ jobs:
           cp vite.perf.config.ts baseline/vite.perf.config.ts
           cp tsconfig.perf.json baseline/tsconfig.perf.json
 
-      - name: Make original renderer obey the same one-frame debug protocol
+      - name: Make original renderer obey the same one-frame protocol
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("baseline/src/runtime/use-hero-wave-renderer.ts")
-          source = path.read_text(encoding="utf-8")
-          request_before = '''      if (
-        !running ||
-        frameScheduled ||
-        document.visibilityState === "hidden" ||'''
-          request_after = '''      if (
-        !running ||
-        frameScheduled ||
-        settings.paused ||
-        manualPausedRef.current ||
-        document.visibilityState === "hidden" ||'''
-          step_before = '''      step: (seconds: number) => {
-        const safeSeconds = finite(seconds, 0);'''
-          step_after = '''      step: (seconds: number) => {
-        if (frameScheduled) {
-          cancelAnimationFrame(raf);
-          frameScheduled = false;
-        }
-        const safeSeconds = finite(seconds, 0);'''
-          if source.count(request_before) != 1:
-              raise SystemExit("original requestFrame selector was not uniquely found")
-          source = source.replace(request_before, request_after)
-          if source.count(step_before) != 1:
-              raise SystemExit("original debug.step block was not uniquely found")
-          source = source.replace(step_before, step_after)
-          path.write_text(source, encoding="utf-8")
-          PY
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
           cd baseline
           bunx biome format --write src/runtime/use-hero-wave-renderer.ts
           bun run check
-          cd ..
 
       - name: Build candidate and original harnesses
         run: |
@@ -176,51 +145,9 @@ jobs:
       - name: Verify temporal cache activation in Hero job
         if: matrix.focus == 'hero'
         run: |
-          python - <<'PY'
-          import json, math
-          from pathlib import Path
-
-          report = json.loads(Path("perf-results/benchmark.json").read_text())
-          ratios = []
-          query_ratios = []
-          rows = []
-          for scenario in report.get("scenarios", []):
-              baseline = scenario.get("baseline", {})
-              candidate = scenario.get("candidate", {})
-              bd = baseline.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median")
-              cd = candidate.get("glPerFrame", {}).get("drawArraysInstanced", {}).get("median")
-              bq = baseline.get("gpuSampleCount", {}).get("median")
-              cq = candidate.get("gpuSampleCount", {}).get("median")
-              draw_ratio = cd / bd if isinstance(cd, (int, float)) and isinstance(bd, (int, float)) and bd > 0 else None
-              query_ratio = cq / bq if isinstance(cq, (int, float)) and isinstance(bq, (int, float)) and bq > 0 else None
-              if draw_ratio is not None:
-                  ratios.append(draw_ratio)
-              if query_ratio is not None:
-                  query_ratios.append(query_ratio)
-              rows.append({
-                  "name": scenario.get("name"),
-                  "baselineInstancedDraws": bd,
-                  "candidateInstancedDraws": cd,
-                  "drawRatio": draw_ratio,
-                  "baselineGpuQueries": bq,
-                  "candidateGpuQueries": cq,
-                  "queryRatio": query_ratio,
-              })
-          geometric = lambda values: math.exp(sum(map(math.log, values)) / len(values))
-          result = {
-              "drawArraysInstancedRatio": geometric(ratios) if ratios else None,
-              "gpuQueryRatio": geometric(query_ratios) if query_ratios else None,
-              "scenarios": rows,
-          }
-          Path("perf-results/temporal-activation.json").write_text(
-              json.dumps(result, indent=2) + "\n"
-          )
-          print(json.dumps(result, indent=2))
-          if len(rows) < 4 or result["drawArraysInstancedRatio"] is None:
-              raise SystemExit("Incomplete Hero cache activation matrix")
-          if result["drawArraysInstancedRatio"] > 0.5:
-              raise SystemExit("Hero temporal cache did not reduce recurring integration draws")
-          PY
+          python perf/scripts/verify-temporal-activation.py \
+            --input perf-results/benchmark.json \
+            --output perf-results/temporal-activation.json
 
       - name: Collect exact candidate and server logs
         if: always()
@@ -279,61 +206,10 @@ jobs:
 
       - name: Merge direct reports and captures
         run: |
-          python - <<'PY'
-          import json, shutil
-          from pathlib import Path
-
-          artifacts = sorted(Path("downloaded").glob("final-temporal-*"))
-          if len(artifacts) != 2:
-              raise SystemExit(f"Expected 2 focus artifacts, found {len(artifacts)}")
-          reports = []
-          out = Path("perf-results")
-          (out / "screenshots" / "baseline").mkdir(parents=True, exist_ok=True)
-          (out / "screenshots" / "candidate").mkdir(parents=True, exist_ok=True)
-          (out / "candidate").mkdir(parents=True, exist_ok=True)
-          for artifact in artifacts:
-              report_path = artifact / "benchmark.json"
-              if not report_path.exists():
-                  raise SystemExit(f"Missing benchmark.json in {artifact}")
-              reports.append(json.loads(report_path.read_text()))
-              for side in ("baseline", "candidate"):
-                  source = artifact / "screenshots" / side
-                  if source.exists():
-                      for image in source.glob("*.png"):
-                          shutil.copy2(image, out / "screenshots" / side / image.name)
-              source_candidate = artifact / "candidate"
-              if source_candidate.exists():
-                  for item in source_candidate.iterdir():
-                      target = out / "candidate" / item.name
-                      if item.is_dir():
-                          if target.exists():
-                              shutil.rmtree(target)
-                          shutil.copytree(item, target)
-                      else:
-                          shutil.copy2(item, target)
-          combined = dict(reports[0])
-          combined["generatedAt"] = max(
-              report.get("generatedAt", "") for report in reports
-          )
-          combined["scenarios"] = [
-              scenario
-              for report in reports
-              for scenario in report.get("scenarios", [])
-          ]
-          combined["profiles"] = [
-              profile
-              for report in reports
-              for profile in report.get("profiles", [])
-          ]
-          combined["snapshots"] = [
-              snapshot
-              for report in reports
-              for snapshot in report.get("snapshots", [])
-          ]
-          (out / "benchmark.json").write_text(
-              json.dumps(combined, indent=2) + "\n"
-          )
-          PY
+          python perf/scripts/merge-focus-results.py \
+            --downloaded downloaded \
+            --output perf-results \
+            --expected-artifacts 2
 
       - name: Install visual comparison dependencies
         run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
