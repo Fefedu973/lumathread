@@ -63,9 +63,7 @@ const scheduling = `    if (shouldUseTemporalHeroCache(root, preparedSceneFrames
 `;
 
 const completed =
-  source.slice(0, replacementStart) +
-  scheduling +
-  source.slice(replacementEnd);
+  source.slice(0, replacementStart) + scheduling + source.slice(replacementEnd);
 if (!completed.includes(activeMarker)) {
   throw new Error("Temporal scheduling completion did not produce activation.");
 }
