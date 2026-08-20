@@ -1,0 +1,3 @@
+final-stack-direct
+integral-static-uniforms
+glass-static-uniforms
