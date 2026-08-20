@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - perf/major-2x-hero-temporal-rate-validation
+  pull_request:
+    branches:
+      - perf/major-2x-hero-temporal-cache
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: hero-temporal-rate-validation-${{ github.ref }}
+  group: hero-temporal-rate-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,13 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rate:
-          - 15
-          - 20
-          - 24
-          - 30
-          - 40
-          - 60
+        rate: [15, 20, 24, 30, 40, 60]
 
     steps:
       - name: Check out temporal-rate candidate
@@ -49,7 +46,7 @@ jobs:
       - name: Install candidate dependencies
         run: bun install --frozen-lockfile
 
-      - name: Materialize the consolidated renderer baseline
+      - name: Materialize consolidated renderer baseline
         run: |
           bash perf/scripts/materialize-validated-stack.sh
           bunx biome format --write src
@@ -280,7 +277,7 @@ jobs:
           bun run build
           cd ..
           mkdir -p baseline/perf
-          rm -rf baseline/perf/harness
+          rm -rf baseline/perf/harness baseline/perf/scripts
           cp -R perf/harness baseline/perf/harness
           cp -R perf/scripts baseline/perf/scripts
           cp vite.perf.config.ts baseline/vite.perf.config.ts
