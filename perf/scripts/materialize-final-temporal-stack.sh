@@ -13,12 +13,17 @@ git fetch --no-tags origin \
   "$TEMPORAL_TRANSFORM_SHA" \
   "$TEMPORAL_FIX_SHA"
 
-git show \
-  "$TEMPORAL_TRANSFORM_SHA:perf/experiments/apply-hero-temporal-interpolation-experiment.mjs.gz.b64" \
-  | base64 --decode \
-  | gzip --decompress \
-  > /tmp/apply-hero-temporal-interpolation-experiment.mjs
-node /tmp/apply-hero-temporal-interpolation-experiment.mjs
+if ! grep -q "updateTemporalHeroCache" src/runtime/path-renderer.ts; then
+  git show \
+    "$TEMPORAL_TRANSFORM_SHA:perf/experiments/apply-hero-temporal-interpolation-experiment.mjs.gz.b64" \
+    | base64 --decode \
+    | gzip --decompress \
+    > /tmp/apply-hero-temporal-interpolation-experiment.mjs
+  node /tmp/apply-hero-temporal-interpolation-experiment.mjs
+  temporal_transform_status="applied"
+else
+  temporal_transform_status="already-materialized"
+fi
 
 git show \
   "$TEMPORAL_FIX_SHA:perf/scripts/fix-hero-temporal-cache-state.mjs" \
@@ -40,8 +45,10 @@ bunx biome format --write \
 cat > perf/materialized-final-temporal-stack.txt <<EOF
 base-stack=$BASE_STACK_SHA
 temporal-transform=$TEMPORAL_TRANSFORM_SHA
+temporal-transform-status=$temporal_transform_status
 temporal-fix=$TEMPORAL_FIX_SHA
 anchor-rate-hz=30
 EOF
 
-printf '%s\n' "Materialized consolidated CTA stack plus active 30 Hz Hero HDR cache."
+printf '%s\n' \
+  "Materialized consolidated CTA stack plus active 30 Hz Hero HDR cache ($temporal_transform_status)."
