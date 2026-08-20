@@ -83,10 +83,11 @@ export function createDrawCommon({
   const bindIntegralGeometry = (
     resources: PathResources,
     pass: number,
+    bundle: ProgramBundle,
     segmentOffsetFloats = 0,
+    instanceDivisor = 1,
   ) => {
     if (!exactGl) return;
-    const bundle = resources.integralPrograms[pass]!;
     const corner = bundle.attributes.aCorner ?? -1;
     exactGl.bindBuffer(exactGl.ARRAY_BUFFER, resources.quadBuffer);
     if (corner >= 0) {
@@ -108,7 +109,7 @@ export function createDrawCommon({
         stride,
         (segmentOffsetFloats + offset) * Float32Array.BYTES_PER_ELEMENT,
       );
-      exactGl.vertexAttribDivisor(location, 1);
+      exactGl.vertexAttribDivisor(location, instanceDivisor);
     };
     bindAttribute("aSegmentStart", 2, 0);
     bindAttribute("aSegmentEnd", 2, 2);
@@ -116,8 +117,17 @@ export function createDrawCommon({
     bindAttribute("aEndpointWeights", 2, 6);
   };
 
-  const bindCompositeTextures = (resources: PathResources) => {
+  const bindCompositeTextures = (
+    resources: PathResources,
+    useTemporalBank = false,
+  ) => {
     if (!exactGl) return;
+    const nextWaveTextures = useTemporalBank
+      ? resources.temporalWaveTextures
+      : resources.waveTextures;
+    const nextReflectionTextures = useTemporalBank
+      ? resources.temporalReflectionTextures
+      : resources.reflectionTextures;
     exactGl.activeTexture(exactGl.TEXTURE0);
     exactGl.bindTexture(exactGl.TEXTURE_2D, resources.waveTextures[0]);
     exactGl.activeTexture(exactGl.TEXTURE1);
@@ -130,6 +140,18 @@ export function createDrawCommon({
     exactGl.bindTexture(exactGl.TEXTURE_2D, resources.waveTextures[2]);
     exactGl.activeTexture(exactGl.TEXTURE5);
     exactGl.bindTexture(exactGl.TEXTURE_2D, maskTexture);
+    if (useTemporalBank) {
+      exactGl.activeTexture(exactGl.TEXTURE7);
+      exactGl.bindTexture(exactGl.TEXTURE_2D, nextWaveTextures[0]);
+      exactGl.activeTexture(exactGl.TEXTURE8);
+      exactGl.bindTexture(exactGl.TEXTURE_2D, nextReflectionTextures[0]);
+      exactGl.activeTexture(exactGl.TEXTURE9);
+      exactGl.bindTexture(exactGl.TEXTURE_2D, nextWaveTextures[1]);
+      exactGl.activeTexture(exactGl.TEXTURE10);
+      exactGl.bindTexture(exactGl.TEXTURE_2D, nextReflectionTextures[1]);
+      exactGl.activeTexture(exactGl.TEXTURE11);
+      exactGl.bindTexture(exactGl.TEXTURE_2D, nextWaveTextures[2]);
+    }
   };
 
   const localVisualTime = (settings: Settings) =>
