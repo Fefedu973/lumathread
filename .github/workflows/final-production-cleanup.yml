@@ -1,0 +1,183 @@
+name: Final production repository cleanup
+
+on:
+  push:
+    branches:
+      - perf/final-production-renderer
+    paths:
+      - perf/final-validation.json
+      - perf/final-validation.md
+      - .github/workflows/final-production-cleanup.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: final-production-repository-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out accepted final branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-production-renderer
+          fetch-depth: 0
+
+      - name: Verify accepted proof belongs to current source tree
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          path = Path("perf/final-validation.json")
+          if not path.exists():
+              raise SystemExit("final validation report is missing")
+          report = json.loads(path.read_text())
+          if report.get("accepted") is not True:
+              raise SystemExit("final renderer is not accepted")
+          current_tree = subprocess.check_output(
+              ["git", "rev-parse", "HEAD:src"], text=True
+          ).strip()
+          if report.get("srcTreeSha") != current_tree:
+              raise SystemExit(
+                  f"proof/source mismatch: proof={report.get('srcTreeSha')} current={current_tree}"
+              )
+          PY
+
+      - name: Create or update the single final pull request
+        id: final-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          final_pr="$(
+            gh pr list \
+              --state open \
+              --head perf/final-production-renderer \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -z "$final_pr" ]; then
+            gh pr create \
+              --base main \
+              --head perf/final-production-renderer \
+              --title 'perf: final materialized Lumathread renderer' \
+              --body-file perf/final-validation.md
+            final_pr="$(
+              gh pr list \
+                --state open \
+                --head perf/final-production-renderer \
+                --json number \
+                --jq '.[0].number'
+            )"
+          else
+            gh pr edit "$final_pr" \
+              --title 'perf: final materialized Lumathread renderer' \
+              --body-file perf/final-validation.md
+          fi
+          gh pr ready "$final_pr" 2>/dev/null || true
+          echo "number=$final_pr" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/${{ github.repository }}/pull/$final_pr" >> "$GITHUB_OUTPUT"
+
+      - name: Close superseded performance pull requests with provenance
+        id: close-prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_PR: ${{ steps.final-pr.outputs.number }}
+          FINAL_URL: ${{ steps.final-pr.outputs.url }}
+        run: |
+          mkdir -p perf
+          gh pr list \
+            --state open \
+            --limit 200 \
+            --json number,title,headRefName,baseRefName,url,isDraft \
+            > /tmp/open-prs.json
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          final_number = int(os.environ["FINAL_PR"])
+          final_url = os.environ["FINAL_URL"]
+          pulls = json.loads(Path("/tmp/open-prs.json").read_text())
+          closed = []
+          retained = []
+          for pull in pulls:
+              number = int(pull["number"])
+              head = pull.get("headRefName") or ""
+              if number == final_number:
+                  retained.append(pull)
+                  continue
+              if not head.startswith("perf/"):
+                  retained.append(pull)
+                  continue
+              message = (
+                  "Superseded by the materialized final renderer and its direct "
+                  f"accepted proof set: {final_url}.\n\n"
+                  "This experimental PR is being closed, not deleted: its branch, "
+                  "discussion and workflow artifacts remain available as provenance."
+              )
+              subprocess.run(
+                  ["gh", "pr", "comment", str(number), "--body", message],
+                  check=True,
+              )
+              subprocess.run(
+                  ["gh", "pr", "close", str(number)],
+                  check=True,
+              )
+              closed.append(pull)
+
+          audit = {
+              "generatedAt": datetime.now(timezone.utc).isoformat(),
+              "finalPullRequest": {
+                  "number": final_number,
+                  "url": final_url,
+              },
+              "closedCount": len(closed),
+              "closed": closed,
+              "retainedOpen": retained,
+          }
+          Path("perf/closed-performance-pull-requests.json").write_text(
+              json.dumps(audit, indent=2) + "\n"
+          )
+          print(json.dumps(audit, indent=2))
+          PY
+
+      - name: Commit cleanup audit without changing renderer source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add perf/closed-performance-pull-requests.json
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m 'chore(perf): record superseded experiment cleanup [skip ci]'
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin perf/final-production-renderer \
+                && git push origin HEAD:perf/final-production-renderer; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep 2
+          done
+          echo 'Unable to publish cleanup audit.' >&2
+          exit 1
+
+      - name: Publish final repository state
+        if: always()
+        run: |
+          printf 'Final PR: %s\n\n' '${{ steps.final-pr.outputs.url }}' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f perf/closed-performance-pull-requests.json ]; then
+            printf '```json\n' >> "$GITHUB_STEP_SUMMARY"
+            cat perf/closed-performance-pull-requests.json >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi

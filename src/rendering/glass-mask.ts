@@ -84,6 +84,13 @@ export function configureCanvasLetterSpacing(
 export const HERO_GLASS_MASK_MAX_DIMENSION = 1280;
 export const HERO_GLASS_CHAMFER_DIAGONAL = Math.SQRT2;
 
+export interface GlassMaskBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
 export function buildChamferDistance(
   alpha: Uint8Array,
   width: number,
@@ -146,13 +153,27 @@ export function buildChamferDistance(
 export function encodeGlassSignedDistance(
   canvas: HTMLCanvasElement,
   rangePixels: number,
-) {
+): GlassMaskBounds | null {
   const context = canvas.getContext("2d");
-  if (!context) return;
-  const image = context.getImageData(0, 0, canvas.width, canvas.height);
-  const alpha = new Uint8Array(canvas.width * canvas.height);
+  if (!context) return null;
+  const width = canvas.width;
+  const height = canvas.height;
+  const image = context.getImageData(0, 0, width, height);
+  const alpha = new Uint8Array(width * height);
+  let left = width;
+  let top = height;
+  let right = 0;
+  let bottom = 0;
   for (let index = 0; index < alpha.length; index++) {
-    alpha[index] = image.data[index * 4 + 3] ?? 0;
+    const alphaValue = image.data[index * 4 + 3] ?? 0;
+    alpha[index] = alphaValue;
+    if (alphaValue <= 0) continue;
+    const x = index % width;
+    const y = Math.floor(index / width);
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x + 1);
+    bottom = Math.max(bottom, y + 1);
   }
   const distanceToInside = buildChamferDistance(
     alpha,
@@ -181,6 +202,7 @@ export function encodeGlassSignedDistance(
     image.data[offset + 3] = 255;
   }
   context.putImageData(image, 0, 0);
+  return right > left && bottom > top ? { left, top, right, bottom } : null;
 }
 
 export function renderGlassTextMask(

@@ -1,0 +1,7 @@
+base-stack=b3c926b88b4861d851075015c141c67f225517fb
+temporal-transform=0abfb298182f20dc9d7eb49ef773334a50fe015b
+temporal-transform-status=completed-from-partial
+temporal-fix=be587db834a56bc084f3ac31fb61404a23e243bf
+anchor-rate-hz=15
+static-cta-composite-source=perf/scripts/apply-static-nontemporal-path-experiment.mjs
+static-cta-composite-status=applied

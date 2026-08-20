@@ -1,0 +1,9 @@
+{
+  "frozenOriginal": "7f4289aa3ff640f479701ceec0b0d790af037692",
+  "consolidatedBase": "b3c926b88b4861d851075015c141c67f225517fb",
+  "ctaIdleTransform": "f4f7baff286944acf7483320c679311957001788",
+  "heroTemporalRateHz": 15,
+  "ctaIdleTemporalRateHz": 10,
+  "pointerActiveRendering": "exact-frame-by-frame",
+  "staticCtaComposite": true
+}

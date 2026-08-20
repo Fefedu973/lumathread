@@ -1,0 +1,114 @@
+name: Final production renderer closeout
+
+on:
+  push:
+    branches:
+      - perf/final-production-renderer
+    paths:
+      - .github/workflows/final-production-closeout.yml
+      - perf/scripts/finalize-production-proofs.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: final-production-closeout
+  cancel-in-progress: true
+
+jobs:
+  closeout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+
+    steps:
+      - name: Check out final production branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-production-renderer
+          fetch-depth: 0
+
+      - name: Wait for and aggregate all exact-source proofs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python perf/scripts/finalize-production-proofs.py \
+            --repository "${{ github.repository }}" \
+            --branch perf/final-production-renderer \
+            --timeout-seconds 7200 \
+            --poll-seconds 30
+
+      - name: Commit accepted proof set and final report
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            perf/proofs \
+            perf/final-validation.json \
+            perf/final-validation.md
+          git commit -m 'test(perf): accept final production renderer [skip ci]'
+          for attempt in 1 2 3 4 5; do
+            if git pull --rebase origin perf/final-production-renderer \
+                && git push origin HEAD:perf/final-production-renderer; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep 2
+          done
+          echo 'Unable to publish final proof set.' >&2
+          exit 1
+
+      - name: Publish final report in job summary
+        if: always()
+        run: |
+          test ! -f perf/final-validation.md \
+            || cat perf/final-validation.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full closeout evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-production-closeout-${{ github.sha }}
+          path: |
+            perf/final-validation.json
+            perf/final-validation.md
+            perf/proofs
+            perf/final-proof-downloads
+            perf/final-proof-timeout.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Create or update final pull request
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pr_number="$(
+            gh pr list \
+              --head perf/final-production-renderer \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -z "$pr_number" ]; then
+            gh pr create \
+              --draft \
+              --base main \
+              --head perf/final-production-renderer \
+              --title 'perf: final materialized Lumathread renderer' \
+              --body-file perf/final-validation.md
+            pr_number="$(
+              gh pr list \
+                --head perf/final-production-renderer \
+                --state open \
+                --json number \
+                --jq '.[0].number'
+            )"
+          else
+            gh pr edit "$pr_number" \
+              --title 'perf: final materialized Lumathread renderer' \
+              --body-file perf/final-validation.md
+          fi
+          gh pr ready "$pr_number"
