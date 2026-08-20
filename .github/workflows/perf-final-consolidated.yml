@@ -77,6 +77,44 @@ jobs:
           cp vite.perf.config.ts baseline/vite.perf.config.ts
           cp tsconfig.perf.json baseline/tsconfig.perf.json
 
+      - name: Apply symmetric one-frame debug stepping to baseline
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("baseline/src/runtime/use-hero-wave-renderer.ts")
+          source = path.read_text(encoding="utf-8")
+          request_before = '''      if (
+        !running ||
+        frameScheduled ||
+        document.visibilityState === "hidden" ||'''
+          request_after = '''      if (
+        !running ||
+        frameScheduled ||
+        settings.paused ||
+        manualPausedRef.current ||
+        document.visibilityState === "hidden" ||'''
+          step_before = '''      step: (seconds: number) => {
+        const safeSeconds = finite(seconds, 0);'''
+          step_after = '''      step: (seconds: number) => {
+        if (frameScheduled) {
+          cancelAnimationFrame(raf);
+          frameScheduled = false;
+        }
+        const safeSeconds = finite(seconds, 0);'''
+          if source.count(request_before) != 1:
+              raise SystemExit("baseline requestFrame selector was not uniquely found")
+          source = source.replace(request_before, request_after)
+          if source.count(step_before) != 1:
+              raise SystemExit("baseline debug.step block was not uniquely found")
+          source = source.replace(step_before, step_after)
+          path.write_text(source, encoding="utf-8")
+          PY
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
+
       - name: Build baseline and candidate harnesses
         run: |
           bunx vite build \
