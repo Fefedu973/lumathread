@@ -1,0 +1,163 @@
+name: Hero 15 Hz temporal cache evidence gate
+
+on:
+  push:
+    branches:
+      - perf/major-2x-hero-temporal-15hz-long
+  pull_request:
+    branches:
+      - perf/major-2x-hero-temporal-rate-validation
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: hero-temporal-15hz-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out evidence gate
+        uses: actions/checkout@v4
+
+      - name: Download the immutable long-run artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --location --retry 5 --retry-all-errors \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9398298138/zip" \
+            --output /tmp/hero-temporal-15hz-long.zip
+          echo "893a1e5569e59ce0cc9935ba4a2447039f41b829887bf6d5ab4d1142237fabda  /tmp/hero-temporal-15hz-long.zip" \
+            | sha256sum --check --strict
+          mkdir -p evidence
+          unzip -q /tmp/hero-temporal-15hz-long.zip -d evidence
+
+      - name: Enforce activation, performance and visual gates
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("evidence")
+          evaluation_paths = list(root.rglob("hero-15hz-long-evaluation.json"))
+          visual_paths = list(root.rglob("visual-diff.json"))
+          if len(evaluation_paths) != 1 or len(visual_paths) != 1:
+              raise SystemExit(
+                  f"expected one evaluation and one visual report, found "
+                  f"{len(evaluation_paths)} and {len(visual_paths)}"
+              )
+
+          evaluation = json.loads(evaluation_paths[0].read_text())
+          visual = json.loads(visual_paths[0].read_text())
+          scenarios = evaluation.get("scenarios", [])
+
+          errors = []
+          if evaluation.get("rateHz") != 15:
+              errors.append(f"unexpected anchor rate: {evaluation.get('rateHz')}")
+          if evaluation.get("scenarioCount") != 4 or len(scenarios) != 4:
+              errors.append("the four production Hero surfaces were not all measured")
+          if evaluation.get("cacheActiveScenarios") != 4:
+              errors.append("the temporal cache was not active on every Hero surface")
+
+          geometric_gpu = evaluation.get("gpuRatio")
+          geometric_wall = evaluation.get("wallRatio")
+          if not isinstance(geometric_gpu, (int, float)) or geometric_gpu > 0.40:
+              errors.append(f"geometric GPU ratio exceeds 0.40: {geometric_gpu}")
+          if not isinstance(geometric_wall, (int, float)) or geometric_wall > 0.90:
+              errors.append(f"geometric wall ratio exceeds 0.90: {geometric_wall}")
+
+          for scenario in scenarios:
+              name = scenario.get("name", "unknown")
+              gpu_ratio = scenario.get("gpuRatio")
+              wall_ratio = scenario.get("wallRatio")
+              baseline_draws = scenario.get("baselineInstancedDraws")
+              candidate_draws = scenario.get("candidateInstancedDraws")
+              if scenario.get("cacheActive") is not True:
+                  errors.append(f"{name}: cache inactive")
+              if not isinstance(gpu_ratio, (int, float)) or gpu_ratio > 0.40:
+                  errors.append(f"{name}: GPU ratio exceeds 0.40: {gpu_ratio}")
+              if not isinstance(wall_ratio, (int, float)) or wall_ratio > 1.10:
+                  errors.append(f"{name}: wall ratio exceeds 1.10: {wall_ratio}")
+              if baseline_draws != 3:
+                  errors.append(f"{name}: unexpected baseline instanced draws: {baseline_draws}")
+              if not isinstance(candidate_draws, (int, float)) or candidate_draws > 1.0:
+                  errors.append(f"{name}: candidate instanced draws exceed 1.0: {candidate_draws}")
+
+          images = visual.get("images", [])
+          if visual.get("passed") is not True:
+              errors.append("visual report did not pass")
+          if len(images) != 10:
+              errors.append(f"expected 10 sequential/off-anchor captures, found {len(images)}")
+          for image in images:
+              name = image.get("name", "unknown")
+              if image.get("passed") is not True:
+                  errors.append(f"{name}: visual gate failed")
+              if image.get("ssim", 0) < 0.9995:
+                  errors.append(f"{name}: SSIM below 0.9995")
+              if image.get("rmse", 1) > 0.002:
+                  errors.append(f"{name}: RMSE exceeds 0.002")
+              if image.get("changedPixelRatioOver2", 1) > 0.0005:
+                  errors.append(f"{name}: pixels over 2/255 exceed 0.05%")
+              if image.get("changedPixelRatioOver8", 1) > 0.00005:
+                  errors.append(f"{name}: pixels over 8/255 exceed 0.005%")
+
+          verdict = {
+              "accepted": not errors,
+              "artifactId": 9398298138,
+              "artifactSha256": "893a1e5569e59ce0cc9935ba4a2447039f41b829887bf6d5ab4d1142237fabda",
+              "rateHz": evaluation.get("rateHz"),
+              "wallRatioVsConsolidatedStack": geometric_wall,
+              "gpuRatioVsConsolidatedStack": geometric_gpu,
+              "cacheActiveScenarios": evaluation.get("cacheActiveScenarios"),
+              "captureCount": len(images),
+              "minSsim": min((image.get("ssim", 0) for image in images), default=None),
+              "maxRmse": max((image.get("rmse", 0) for image in images), default=None),
+              "maxPixelError8Bit": max(
+                  (image.get("maxError8Bit", 0) for image in images), default=None
+              ),
+              "errors": errors,
+          }
+          Path("hero-15hz-evidence-verdict.json").write_text(
+              json.dumps(verdict, indent=2) + "\n"
+          )
+          Path("hero-15hz-evidence-verdict.md").write_text(
+              "# Hero 15 Hz long-run evidence\n\n"
+              f"- Verdict: **{'ACCEPT' if not errors else 'REJECT'}**\n"
+              f"- GPU ratio vs consolidated stack: `{geometric_gpu:.6f}`\n"
+              f"- Wall ratio vs consolidated stack: `{geometric_wall:.6f}`\n"
+              f"- Cache active: `{evaluation.get('cacheActiveScenarios')}/4` surfaces\n"
+              f"- Sequential/off-anchor captures: `{len(images)}`\n"
+              f"- Minimum SSIM: `{verdict['minSsim']:.7f}`\n"
+              f"- Maximum normalized RMSE: `{verdict['maxRmse']:.7f}`\n"
+              f"- Maximum channel error: `{verdict['maxPixelError8Bit']}/255`\n"
+          )
+          print(json.dumps(verdict, indent=2))
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
+
+      - name: Publish evidence summary
+        if: always()
+        run: |
+          test ! -f hero-15hz-evidence-verdict.md \
+            || cat hero-15hz-evidence-verdict.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload normalized verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hero-15hz-evidence-verdict-${{ github.sha }}
+          path: |
+            hero-15hz-evidence-verdict.json
+            hero-15hz-evidence-verdict.md
+          if-no-files-found: error
+          retention-days: 30
