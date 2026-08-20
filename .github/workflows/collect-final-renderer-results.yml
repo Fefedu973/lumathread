@@ -1,0 +1,244 @@
+name: Collect final renderer results
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - .github/workflows/collect-final-renderer-results.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out final branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-validated-renderer
+          fetch-depth: 0
+
+      - name: Find completed proof runs and download artifacts
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import time
+          from pathlib import Path
+
+          repository = "Fefedu973/lumathread"
+          branch = "perf/final-validated-renderer"
+          required = {
+              "direct": "Final committed renderer proof",
+              "wall": "Final uninstrumented wall and FPS proof",
+              "pointer": "Final CTA pointer transition proof",
+          }
+
+          def query_runs():
+              raw = subprocess.check_output(
+                  [
+                      "gh", "api",
+                      f"repos/{repository}/actions/runs",
+                      "-f", f"branch={branch}",
+                      "-f", "per_page=100",
+                  ],
+                  text=True,
+              )
+              return json.loads(raw).get("workflow_runs", [])
+
+          selected = {}
+          for _ in range(50):
+              runs = query_runs()
+              for key, name in required.items():
+                  matches = [
+                      run for run in runs
+                      if run.get("name") == name and run.get("status") == "completed"
+                  ]
+                  matches.sort(key=lambda run: run.get("created_at", ""), reverse=True)
+                  if matches:
+                      selected[key] = matches[0]
+              if len(selected) == len(required):
+                  break
+              time.sleep(20)
+
+          if set(selected) != set(required):
+              raise SystemExit(
+                  f"fail-closed: missing completed proof runs: {set(required) - set(selected)}"
+              )
+
+          current = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          for key, run in selected.items():
+              proof_sha = run["head_sha"]
+              subprocess.run(["git", "fetch", "origin", proof_sha], check=True)
+              changed = subprocess.run(
+                  ["git", "diff", "--quiet", proof_sha, current, "--", "src"],
+              ).returncode
+              if changed != 0:
+                  raise SystemExit(
+                      f"{key} proof {proof_sha} does not match current committed src tree {current}"
+                  )
+              destination = Path("collected") / key
+              destination.mkdir(parents=True, exist_ok=True)
+              subprocess.run(
+                  [
+                      "gh", "run", "download", str(run["id"]),
+                      "--repo", repository,
+                      "--dir", str(destination),
+                  ],
+                  check=True,
+              )
+
+          Path("collected/runs.json").write_text(
+              json.dumps(selected, indent=2) + "\n"
+          )
+          PY
+
+      - name: Consolidate proof reports fail-closed
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def find_json(root, name):
+              matches = list(Path(root).rglob(name))
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"expected exactly one {name} under {root}, found {matches}"
+                  )
+              return json.loads(matches[0].read_text()), str(matches[0])
+
+          runs = json.loads(Path("collected/runs.json").read_text())
+          direct, direct_path = find_json(
+              "collected/direct", "final-renderer-proof.json"
+          )
+          wall, wall_path = find_json(
+              "collected/wall", "final-production-wall.json"
+          )
+          pointer, pointer_path = find_json(
+              "collected/pointer", "final-pointer-recovery.json"
+          )
+
+          visual_candidates = list(Path("collected/direct").rglob("visual-diff.json"))
+          if len(visual_candidates) != 1:
+              raise SystemExit(
+                  f"expected exactly one direct visual report, found {visual_candidates}"
+              )
+          visual = json.loads(visual_candidates[0].read_text())
+          visual_pass = visual.get("passed")
+          if visual_pass is None:
+              visual_pass = visual.get("overall") == "PASS"
+          if visual_pass is not True:
+              raise SystemExit("direct visual parity did not pass")
+          if direct.get("accepted") is not True:
+              raise SystemExit("direct half-GPU proof did not pass")
+          if pointer.get("passed") is not True:
+              raise SystemExit("pointer fallback/recovery proof did not pass")
+
+          result = {
+              "sourceSha": runs["direct"]["head_sha"],
+              "proofRuns": {
+                  key: {
+                      "id": run["id"],
+                      "url": run["html_url"],
+                      "conclusion": run["conclusion"],
+                      "headSha": run["head_sha"],
+                  }
+                  for key, run in runs.items()
+              },
+              "accepted": True,
+              "gpuTargetReached": direct.get("accepted") is True,
+              "fpsTargetReached": wall.get("targetReached") is True,
+              "direct": direct,
+              "productionWall": wall,
+              "pointerRecovery": pointer,
+              "visual": visual,
+              "sourceReports": {
+                  "direct": direct_path,
+                  "wall": wall_path,
+                  "pointer": pointer_path,
+                  "visual": str(visual_candidates[0]),
+              },
+          }
+          Path("perf/final-renderer-results.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+
+          overall = direct["overall"]
+          hero = direct["hero"]
+          cta = direct["cta"]
+          lines = [
+              "# Final Lumathread renderer results",
+              "",
+              f"Source commit proved: `{result['sourceSha']}`.",
+              "",
+              "## Final verdict",
+              "",
+              f"- Visual parity: **PASS**",
+              f"- Half-GPU target: **{'REACHED' if result['gpuTargetReached'] else 'NOT REACHED'}**",
+              f"- 2× uncapped-FPS target: **{'REACHED' if result['fpsTargetReached'] else 'NOT REACHED'}**",
+              f"- All-surface GPU ratio: **{overall['gpuRatio']:.4f}** ({overall['gpuReductionPercent']:.1f}% reduction)",
+              f"- Instrumented all-surface wall ratio: **{overall['wallRatio']:.4f}** ({overall['fpsMultiplier']:.2f}×)",
+              f"- Uninstrumented production wall ratio: **{wall['wallRatio']:.4f}** ({wall['equivalentFpsMultiplier']:.2f}×)",
+              f"- Hero GPU ratio: **{hero['gpuRatio']:.4f}**",
+              f"- CTA GPU ratio: **{cta['gpuRatio']:.4f}**",
+              f"- Pointer recovered/active draw ratio: **{pointer['geometricRecoveredToActiveDrawRatio']:.4f}**",
+              "",
+              "## Direct original-to-final scenarios",
+              "",
+              "| Scenario | Wall ratio | FPS multiplier | GPU ratio | GPU reduction |",
+              "|---|---:|---:|---:|---:|",
+          ]
+          for row in direct["scenarios"]:
+              lines.append(
+                  f"| {row['name']} | {row['wallRatio']:.4f} | "
+                  f"{row['fpsMultiplier']:.2f}× | {row['gpuRatio']:.4f} | "
+                  f"{row['gpuReductionPercent']:.1f}% |"
+              )
+          lines += [
+              "",
+              "## Uninstrumented production wall scenarios",
+              "",
+              "| Scenario | Wall ratio | FPS multiplier | Submit ratio | Drain ratio |",
+              "|---|---:|---:|---:|---:|",
+          ]
+          for row in wall["scenarios"]:
+              lines.append(
+                  f"| {row['name']} | {row['wallRatio']:.4f} | "
+                  f"{row['fpsMultiplier']:.2f}× | {row['submitRatio']:.4f} | "
+                  f"{row['drainRatio']:.4f} |"
+              )
+          lines += [
+              "",
+              "## Reproducibility",
+              "",
+              f"- Direct proof: {runs['direct']['html_url']}",
+              f"- Wall/FPS proof: {runs['wall']['html_url']}",
+              f"- Pointer proof: {runs['pointer']['html_url']}",
+              "",
+              "The absolute values use ANGLE/SwiftShader; the paired ratios compare both builds in the same environment.",
+          ]
+          Path("perf/final-renderer-results.md").write_text(
+              "\n".join(lines) + "\n"
+          )
+          print("\n".join(lines))
+          PY
+
+      - name: Commit the single final report
+        run: |
+          git add perf/final-renderer-results.json perf/final-renderer-results.md
+          if git diff --cached --quiet; then
+            echo "Final report is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "perf: publish final renderer proof"
+          git push origin HEAD:perf/final-validated-renderer
