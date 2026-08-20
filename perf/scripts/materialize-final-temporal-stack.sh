@@ -7,6 +7,7 @@ readonly BASE_STACK_SHA="b3c926b88b4861d851075015c141c67f225517fb"
 readonly TEMPORAL_TRANSFORM_SHA="0abfb298182f20dc9d7eb49ef773334a50fe015b"
 readonly TEMPORAL_FIX_SHA="be587db834a56bc084f3ac31fb61404a23e243bf"
 readonly TEMPORAL_ANCHOR_RATE_HZ="15"
+readonly STATIC_CTA_COMPOSITE_SOURCE="perf/scripts/apply-static-nontemporal-path-experiment.mjs"
 
 bash perf/scripts/materialize-validated-stack.sh
 
@@ -72,13 +73,31 @@ grep -Fq "temporalSettingsKey" src/rendering/webgl-resources.ts
 grep -Fq "temporalFramebuffers" src/rendering/webgl-resources.ts
 grep -Fq "uTemporalMix" src/rendering/shaders.ts
 
+if ! grep -Fq "PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER" src/rendering/shaders.ts; then
+  node "$STATIC_CTA_COMPOSITE_SOURCE"
+  static_cta_composite_status="applied"
+else
+  static_cta_composite_status="already-materialized"
+fi
+
+for required in \
+  "PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER" \
+  "PATH_INTEGRAL_STATIC_BASE_COMPOSITE_FRAGMENT_SHADER" \
+  "PATH_DOTS_IDLE_STATIC_FRAGMENT_SHADER" \
+  "PATH_DOTS_POINTER_STATIC_FRAGMENT_SHADER"; do
+  grep -Fq "$required" src/rendering/shaders.ts
+done
+grep -Fq "staticCompositeProgram" src/rendering/webgl-resources.ts
+grep -Fq "staticBaseCompositeProgram" src/rendering/webgl-resources.ts
+
 bunx biome format --write \
   src/rendering/shaders.ts \
   src/rendering/webgl-resources.ts \
   src/runtime/resource-manager.ts \
   src/runtime/draw-common.ts \
   src/runtime/path-renderer.ts \
-  perf/scripts/complete-hero-temporal-scheduling.mjs
+  perf/scripts/complete-hero-temporal-scheduling.mjs \
+  perf/scripts/apply-static-nontemporal-path-experiment.mjs
 
 cat > perf/materialized-final-temporal-stack.txt <<EOF
 base-stack=$BASE_STACK_SHA
@@ -86,7 +105,9 @@ temporal-transform=$TEMPORAL_TRANSFORM_SHA
 temporal-transform-status=$temporal_transform_status
 temporal-fix=$TEMPORAL_FIX_SHA
 anchor-rate-hz=$TEMPORAL_ANCHOR_RATE_HZ
+static-cta-composite-source=$STATIC_CTA_COMPOSITE_SOURCE
+static-cta-composite-status=$static_cta_composite_status
 EOF
 
 printf '%s\n' \
-  "Materialized consolidated CTA stack plus active 15 Hz Hero HDR cache ($temporal_transform_status)."
+  "Materialized consolidated CTA stack plus active 15 Hz Hero HDR cache ($temporal_transform_status) and static CTA composite ($static_cta_composite_status)."
