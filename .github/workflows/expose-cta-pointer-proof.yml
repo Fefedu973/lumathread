@@ -43,6 +43,8 @@ jobs:
           echo "Matching push run: $run_id" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Follow exact pointer-proof run
+        id: child
+        continue-on-error: true
         run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" --exit-status
 
       - name: Download exact pointer-proof artifact
@@ -55,17 +57,57 @@ jobs:
             --dir evidence
 
       - name: Publish visual and behavior verdicts
+        id: verdict
         if: always()
         run: |
           visual=$(find evidence -name visual-diff.md -print -quit)
+          visual_json=$(find evidence -name visual-diff.json -print -quit)
           behavior=$(find evidence -name pointer-transition-behavior.json -print -quit)
           metadata=$(find evidence -name pointer-transition-metadata.json -print -quit)
-          test -n "$visual" && cat "$visual" >> "$GITHUB_STEP_SUMMARY"
-          if test -n "$behavior"; then
-            printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
-            cat "$behavior" >> "$GITHUB_STEP_SUMMARY"
-            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
-          test -n "$metadata"
           test -n "$visual"
+          test -n "$visual_json"
           test -n "$behavior"
+          test -n "$metadata"
+          cat "$visual" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$behavior" >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          python - "$visual_json" "$behavior" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          visual = json.loads(Path(sys.argv[1]).read_text())
+          behavior = json.loads(Path(sys.argv[2]).read_text())
+          errors = list(behavior.get("errors") or [])
+          visual_pass = visual.get("passed")
+          if visual_pass is None:
+              visual_pass = visual.get("overall") == "PASS"
+          result = {
+              "visualPass": bool(visual_pass),
+              "behaviorPass": not errors,
+              "behaviorErrors": errors,
+              "rows": behavior.get("rows", []),
+          }
+          Path("cta-pointer-proof-verdict.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+          print(json.dumps(result, indent=2))
+          if not result["visualPass"] or not result["behaviorPass"]:
+              raise SystemExit("CTA pointer-transition proof did not pass")
+          PY
+
+      - name: Upload exposed pointer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exposed-cta-pointer-proof-${{ github.event.pull_request.head.sha }}
+          path: |
+            evidence
+            cta-pointer-proof-verdict.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce evidence verdict
+        if: always() && steps.verdict.outcome == 'failure'
+        run: exit 1
