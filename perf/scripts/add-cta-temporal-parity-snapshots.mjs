@@ -22,7 +22,9 @@ if (!benchmark.includes('scenario: "cta",\n      pointer: false,')) {
   const before = 'scenario: "cta",\n      theme:';
   const count = benchmark.split(before).length - 1;
   if (count < 4) {
-    throw new Error(`Expected at least four CTA matrix entries, found ${count}.`);
+    throw new Error(
+      `Expected at least four CTA matrix entries, found ${count}.`,
+    );
   }
   benchmark = benchmark.replaceAll(
     before,
@@ -138,7 +140,10 @@ const entries = missing
   )
   .join("\n");
 if (entries) {
-  benchmark = benchmark.replace(snapshotMarker, `${snapshotMarker}${entries}\n`);
+  benchmark = benchmark.replace(
+    snapshotMarker,
+    `${snapshotMarker}${entries}\n`,
+  );
 }
 
 await writeFile(benchmarkPath, benchmark);
