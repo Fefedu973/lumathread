@@ -1,0 +1,57 @@
+name: Materialize final production renderer
+
+on:
+  push:
+    branches:
+      - perf/final-production-renderer
+    paths:
+      - perf/scripts/materialize-final-production-renderer.sh
+      - .github/workflows/materialize-final-production-renderer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-final-production-renderer
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out final integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-production-renderer
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize and validate exact production renderer
+        run: bash perf/scripts/materialize-final-production-renderer.sh
+
+      - name: Verify production sources actually changed
+        run: |
+          git diff --quiet -- src && {
+            echo 'Final renderer materialization produced no source changes.' >&2
+            exit 1
+          }
+          git diff --stat -- src perf/final-production-renderer.json
+
+      - name: Commit the exact source tree to be benchmarked
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src perf/final-production-renderer.json perf/materialized-final-temporal-stack.txt
+          git commit -m 'perf: materialize final production renderer [materialized]'
+          git push origin HEAD:perf/final-production-renderer
