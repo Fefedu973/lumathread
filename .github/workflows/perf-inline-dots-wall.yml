@@ -64,6 +64,7 @@ jobs:
             > /tmp/dot-split.patch
           test -s /tmp/dot-split.patch
           python - <<'PY'
+          import re
           from pathlib import Path
 
           shader_path = Path("src/rendering/shaders.ts")
@@ -81,14 +82,16 @@ jobs:
 
           renderer_path = Path("src/runtime/path-renderer.ts")
           renderer = renderer_path.read_text(encoding="utf-8")
-          before = '''  const shouldSplitFlatDots = (settings: Settings) =>
-            settings.motionMode === "anchored" &&
-            settings.dotsEnabled &&'''
-          after = '''  const shouldSplitFlatDots = (settings: Settings) =>
-            settings.dotsEnabled &&'''
-          if renderer.count(before) != 1:
-              raise SystemExit("split-dot anchored selector normalization is missing")
-          renderer_path.write_text(renderer.replace(before, after), encoding="utf-8")
+          pattern = re.compile(
+              r'(  const shouldSplitFlatDots = \(settings: Settings\) =>\n)'
+              r'    settings\.motionMode === "anchored" &&\n'
+          )
+          renderer, count = pattern.subn(r'\1', renderer, count=1)
+          if count != 1:
+              raise SystemExit(
+                  "split-dot anchored selector normalization is missing"
+              )
+          renderer_path.write_text(renderer, encoding="utf-8")
           PY
           git apply -R --check /tmp/dot-split.patch
           git apply -R --whitespace=nowarn /tmp/dot-split.patch
