@@ -1,0 +1,323 @@
+name: Final uninstrumented wall and FPS proof
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - src/**
+      - perf/final-renderer-provenance.md
+      - .github/workflows/final-production-wall-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-production-wall-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  surface:
+    name: Wall (${{ matrix.surface }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        surface:
+          - hero-dark-desktop
+          - hero-light-desktop
+          - cta-dark-desktop
+          - cta-light-desktop
+          - hero-dark-mobile-2x
+          - hero-light-mobile-2x
+          - cta-dark-mobile-2x
+          - cta-light-mobile-2x
+
+    steps:
+      - name: Check out exact committed candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify final source markers
+        run: |
+          grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
+            src/runtime/path-renderer.ts
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install and validate candidate
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Import pinned uninstrumented wall harness
+        run: |
+          readonly WALL_HARNESS_SHA="f975c472d2791f27ce1f0ed9f8c40fae71cd9efe"
+          git fetch --no-tags origin "$WALL_HARNESS_SHA"
+          for file in \
+            perf/scripts/apply-production-wall-harness.mjs \
+            perf/scripts/benchmark-production-wall.mjs \
+            perf/scripts/patch-original-debug-stepping.py; do
+            mkdir -p "$(dirname "$file")"
+            git show "$WALL_HARNESS_SHA:$file" > "$file"
+          done
+          node perf/scripts/apply-production-wall-harness.mjs
+          bunx biome format --write \
+            perf/harness/index.html \
+            perf/harness/gl-profiler.js \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/benchmark-production-wall.mjs \
+            perf/scripts/apply-production-wall-harness.mjs
+
+      - name: Check out frozen original renderer
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
+      - name: Install original and inject identical wall harness
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build candidate and original wall harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run paired uninstrumented surface benchmark
+        run: |
+          bun perf/scripts/benchmark-production-wall.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out wall-results \
+            --surface "${{ matrix.surface }}" \
+            --repeats 3 \
+            --frames 45 \
+            --warmup-frames 24 \
+            --profile-frames 1
+
+      - name: Verify profiler overhead is absent
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("wall-results/production-wall.json").read_text())
+          scenarios = report.get("scenarios", [])
+          if len(scenarios) != 1:
+              raise SystemExit(f"expected one scenario, found {len(scenarios)}")
+          runs = []
+          for side in ("baseline", "candidate"):
+              runs.extend(scenarios[0].get("raw", {}).get(side, []))
+          if not runs:
+              raise SystemExit("no raw wall runs were recorded")
+          errors = []
+          for index, run in enumerate(runs):
+              profile = run.get("gl", {}).get("gpuProfile")
+              if profile and profile.get("supported"):
+                  errors.append(f"run {index}: per-draw GPU queries remained active")
+              nonzero = {
+                  key: value
+                  for key, value in run.get("glPerFrame", {}).items()
+                  if isinstance(value, (int, float)) and abs(value) > 1e-12
+              }
+              if nonzero:
+                  errors.append(f"run {index}: GL wrappers remained active: {nonzero}")
+          print(json.dumps({"runCount": len(runs), "errors": errors}, indent=2))
+          if errors:
+              raise SystemExit("\n".join(errors))
+          PY
+
+      - name: Upload surface result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-wall-${{ matrix.surface }}-${{ github.sha }}
+          path: |
+            wall-results
+            perf/final-renderer-provenance.md
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop deterministic servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+  aggregate:
+    name: Aggregate final wall proof
+    needs: surface
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all surface results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: final-wall-*-${{ github.sha }}
+          path: surface-results
+          merge-multiple: false
+
+      - name: Aggregate all eight surfaces fail-closed
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          expected = {
+              "hero-dark-desktop",
+              "hero-light-desktop",
+              "cta-dark-desktop",
+              "cta-light-desktop",
+              "hero-dark-mobile-2x",
+              "hero-light-mobile-2x",
+              "cta-dark-mobile-2x",
+              "cta-light-mobile-2x",
+          }
+          rows = []
+          for report_path in Path("surface-results").rglob("production-wall.json"):
+              report = json.loads(report_path.read_text())
+              scenarios = report.get("scenarios", [])
+              if len(scenarios) != 1:
+                  raise SystemExit(f"{report_path}: expected one scenario")
+              scenario = scenarios[0]
+              paired = scenario.get("paired", {})
+              wall = paired.get("wallMeanMs", {}).get("geometricMeanRatio")
+              submit = paired.get("submitMeanMs", {}).get("geometricMeanRatio")
+              drain = paired.get("drainMeanMs", {}).get("geometricMeanRatio")
+              values = (wall, submit, drain)
+              if not all(isinstance(value, (int, float)) and value > 0 for value in values):
+                  raise SystemExit(f"{report_path}: incomplete ratios {values}")
+              rows.append({
+                  "name": scenario.get("name"),
+                  "family": "hero" if scenario.get("name", "").startswith("hero-") else "cta",
+                  "wallRatio": wall,
+                  "fpsMultiplier": 1 / wall,
+                  "submitRatio": submit,
+                  "drainRatio": drain,
+                  "baselineFps": scenario.get("baseline", {}).get("fps", {}).get("median"),
+                  "candidateFps": scenario.get("candidate", {}).get("fps", {}).get("median"),
+              })
+
+          names = {row["name"] for row in rows}
+          if names != expected or len(rows) != len(expected):
+              raise SystemExit(
+                  f"fail-closed: expected {sorted(expected)}, received {sorted(names)}"
+              )
+
+          def geometric(values):
+              return math.exp(sum(math.log(value) for value in values) / len(values))
+
+          def group(family):
+              selected = [row for row in rows if row["family"] == family]
+              wall = geometric([row["wallRatio"] for row in selected])
+              return {
+                  "wallRatio": wall,
+                  "fpsMultiplier": 1 / wall,
+                  "submitRatio": geometric([row["submitRatio"] for row in selected]),
+                  "drainRatio": geometric([row["drainRatio"] for row in selected]),
+              }
+
+          wall_ratio = geometric([row["wallRatio"] for row in rows])
+          result = {
+              "targetReached": wall_ratio <= 0.5,
+              "wallRatio": wall_ratio,
+              "equivalentFpsMultiplier": 1 / wall_ratio,
+              "submitRatio": geometric([row["submitRatio"] for row in rows]),
+              "drainRatio": geometric([row["drainRatio"] for row in rows]),
+              "worstWallRatio": max(row["wallRatio"] for row in rows),
+              "hero": group("hero"),
+              "cta": group("cta"),
+              "scenarioCount": len(rows),
+              "scenarios": sorted(rows, key=lambda row: row["name"]),
+          }
+          Path("final-production-wall.json").write_text(json.dumps(result, indent=2) + "\n")
+          lines = [
+              "# Final uninstrumented wall/FPS proof",
+              "",
+              f"- Requested 2× target: **{'REACHED' if result['targetReached'] else 'NOT REACHED'}**",
+              f"- Geometric wall ratio: **{wall_ratio:.4f}**",
+              f"- Equivalent uncapped FPS multiplier: **{1 / wall_ratio:.2f}×**",
+              f"- Submit ratio: **{result['submitRatio']:.4f}**",
+              f"- Terminal drain ratio: **{result['drainRatio']:.4f}**",
+              f"- Hero wall ratio: **{result['hero']['wallRatio']:.4f}**",
+              f"- CTA wall ratio: **{result['cta']['wallRatio']:.4f}**",
+              f"- Worst individual wall ratio: **{result['worstWallRatio']:.4f}**",
+              "",
+              "| Scenario | Wall ratio | FPS multiplier | Submit ratio | Drain ratio | Baseline FPS | Candidate FPS |",
+              "|---|---:|---:|---:|---:|---:|---:|",
+          ]
+          for row in result["scenarios"]:
+              lines.append(
+                  f"| {row['name']} | {row['wallRatio']:.4f} | {row['fpsMultiplier']:.2f}× | "
+                  f"{row['submitRatio']:.4f} | {row['drainRatio']:.4f} | "
+                  f"{row['baselineFps']:.1f} | {row['candidateFps']:.1f} |"
+              )
+          Path("final-production-wall.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+
+      - name: Publish aggregate wall summary
+        if: always()
+        run: |
+          test ! -f final-production-wall.md \
+            || cat final-production-wall.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload final wall matrix
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-production-wall-${{ github.sha }}
+          path: |
+            final-production-wall.json
+            final-production-wall.md
+            surface-results
+          if-no-files-found: error
+          retention-days: 30
