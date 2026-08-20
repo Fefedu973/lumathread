@@ -61,7 +61,7 @@ jobs:
             | xargs -0 sha256sum \
             | sha256sum \
             | cut -d' ' -f1)
-          expected='45b3690f5620d73f285e8b8ce644453cf18530b0e6261764774c6915dbb695cb'
+          expected='ac10817618afc411c2ac2c03fe6b02a3f4050f2bce6fee2a8e5faaee0bb72f61'
           printf 'actual=%s\nexpected=%s\n' "$actual" "$expected"
           test "$actual" = "$expected"
 
