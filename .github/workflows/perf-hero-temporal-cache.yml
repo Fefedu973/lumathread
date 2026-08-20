@@ -50,14 +50,29 @@ jobs:
             > /tmp/consolidated-stack.patch
           test -s /tmp/consolidated-stack.patch
 
-      - name: Apply 30 Hz interpolated HDR path cache
+      - name: Apply active 30 Hz interpolated HDR path cache
         run: |
           base64 --decode \
             perf/experiments/apply-hero-temporal-interpolation-experiment.mjs.gz.b64 \
             | gzip --decompress \
             > /tmp/apply-hero-temporal-interpolation-experiment.mjs
           node /tmp/apply-hero-temporal-interpolation-experiment.mjs
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/runtime/path-renderer.ts")
+          source = path.read_text(encoding="utf-8")
+          before = 'root.quality.quadrature >= 4 &&'
+          after = 'root.quality.quadrature >= 2 &&'
+          count = source.count(before)
+          if count != 1:
+              raise SystemExit(
+                  f"expected exactly one temporal quadrature selector, found {count}"
+              )
+          path.write_text(source.replace(before, after), encoding="utf-8")
+          PY
           grep -q "updateTemporalHeroCache" src/runtime/path-renderer.ts
+          grep -q "root.quality.quadrature >= 2" src/runtime/path-renderer.ts
           grep -q "temporalWaveTextures" src/rendering/webgl-resources.ts
           bunx biome format --write \
             src/rendering/shaders.ts \
@@ -139,23 +154,50 @@ jobs:
             --candidate perf-results/screenshots/candidate \
             --out perf-results/visual
 
-      - name: Evaluate incremental wall, GPU and draw ratios
+      - name: Evaluate incremental wall, GPU, draw and activation ratios
         if: always()
         run: |
           python - <<'PY'
           import json, math
           from pathlib import Path
+
           path = Path("perf-results/benchmark.json")
           if not path.exists():
-              raise SystemExit(0)
+              raise SystemExit("benchmark report is missing")
           report = json.loads(path.read_text())
           wall = []
           gpu = []
           rows = []
+          active_scenarios = 0
           for scenario in report.get("scenarios", []):
               paired = scenario.get("paired", {})
+              baseline = scenario.get("baseline", {})
+              candidate = scenario.get("candidate", {})
               wr = paired.get("wallMeanMs", {}).get("geometricMeanRatio")
               gr = paired.get("gpuTotalFrameMs", {}).get("geometricMeanRatio")
+              baseline_queries = baseline.get("gpuSampleCount", {}).get("median")
+              candidate_queries = candidate.get("gpuSampleCount", {}).get("median")
+              baseline_draws = (
+                  baseline.get("glPerFrame", {})
+                  .get("drawArraysInstanced", {})
+                  .get("median")
+              )
+              candidate_draws = (
+                  candidate.get("glPerFrame", {})
+                  .get("drawArraysInstanced", {})
+                  .get("median")
+              )
+              cache_active = (
+                  isinstance(baseline_queries, (int, float))
+                  and isinstance(candidate_queries, (int, float))
+                  and candidate_queries < baseline_queries * 0.9
+              ) or (
+                  isinstance(baseline_draws, (int, float))
+                  and isinstance(candidate_draws, (int, float))
+                  and candidate_draws < baseline_draws
+              )
+              if cache_active:
+                  active_scenarios += 1
               if isinstance(wr, (int, float)) and wr > 0:
                   wall.append(wr)
               if isinstance(gr, (int, float)) and gr > 0:
@@ -164,11 +206,18 @@ jobs:
                   "name": scenario.get("name"),
                   "wallRatio": wr,
                   "gpuRatio": gr,
-                  "baseline": scenario.get("baseline", {}),
-                  "candidate": scenario.get("candidate", {}),
+                  "baselineGpuQueries": baseline_queries,
+                  "candidateGpuQueries": candidate_queries,
+                  "baselineInstancedDraws": baseline_draws,
+                  "candidateInstancedDraws": candidate_draws,
+                  "cacheActive": cache_active,
+                  "baseline": baseline,
+                  "candidate": candidate,
               })
           geometric = lambda values: math.exp(sum(map(math.log, values)) / len(values))
           result = {
+              "cacheActiveScenarios": active_scenarios,
+              "scenarioCount": len(rows),
               "wallRatioVsConsolidatedStack": geometric(wall) if wall else None,
               "gpuRatioVsConsolidatedStack": geometric(gpu) if gpu else None,
               "estimatedAdditionalPathMemoryMiBDesktop": 14.5,
@@ -179,6 +228,10 @@ jobs:
               json.dumps(result, indent=2) + "\n"
           )
           print(json.dumps(result, indent=2))
+          if len(rows) < 4 or active_scenarios < 4:
+              raise SystemExit(
+                  f"fail-closed: temporal cache active in only {active_scenarios}/{len(rows)} scenarios"
+              )
           PY
 
       - name: Publish summary
