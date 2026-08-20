@@ -18,8 +18,22 @@ concurrency:
 
 jobs:
   benchmark:
+    name: Production wall (${{ matrix.surface }})
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        surface:
+          - hero-dark-desktop
+          - hero-light-desktop
+          - cta-dark-desktop
+          - cta-light-desktop
+          - hero-dark-mobile-2x
+          - hero-light-mobile-2x
+          - cta-dark-mobile-2x
+          - cta-light-mobile-2x
 
     steps:
       - name: Check out final renderer candidate
@@ -106,15 +120,16 @@ jobs:
             curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
           done
 
-      - name: Run long paired production-wall benchmark
+      - name: Run paired production-wall surface benchmark
         run: |
           bun perf/scripts/benchmark-production-wall.mjs \
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out perf-results \
-            --repeats 6 \
-            --frames 120 \
-            --warmup-frames 60 \
+            --surface "${{ matrix.surface }}" \
+            --repeats 4 \
+            --frames 60 \
+            --warmup-frames 30 \
             --profile-frames 1
 
       - name: Verify profiler overhead is absent
@@ -129,6 +144,8 @@ jobs:
           for scenario in report.get("scenarios", []):
               runs.extend(scenario.get("raw", {}).get("baseline", []))
               runs.extend(scenario.get("raw", {}).get("candidate", []))
+          if len(report.get("scenarios", [])) != 1:
+              errors.append("surface job did not record exactly one scenario")
           if not runs:
               errors.append("no raw runs were recorded")
           for index, run in enumerate(runs):
@@ -147,13 +164,13 @@ jobs:
               raise SystemExit("\n".join(errors))
           PY
 
-      - name: Publish production-wall summary
+      - name: Publish surface summary
         if: always()
         run: |
           test ! -f perf-results/production-wall.md \
             || cat perf-results/production-wall.md >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Collect exact evidence
+      - name: Collect exact surface evidence
         if: always()
         run: |
           mkdir -p perf-results/candidate perf-results/server-logs
@@ -162,14 +179,12 @@ jobs:
           cp /tmp/baseline.log perf-results/server-logs/ 2>/dev/null || true
           cp /tmp/candidate.log perf-results/server-logs/ 2>/dev/null || true
 
-      - name: Upload production-wall result and source
+      - name: Upload surface result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: production-wall-${{ github.sha }}
-          path: |
-            perf-results
-            src
+          name: production-wall-surface-${{ matrix.surface }}-${{ github.sha }}
+          path: perf-results
           if-no-files-found: error
           retention-days: 30
 
@@ -179,6 +194,130 @@ jobs:
           test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
           test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
 
+  aggregate:
+    name: Aggregate production wall target
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all surface artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: production-wall-surface-*-${{ github.sha }}
+          path: surface-results
+          merge-multiple: false
+
+      - name: Aggregate all eight surfaces fail-closed
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          expected = {
+              "hero-dark-desktop",
+              "hero-light-desktop",
+              "cta-dark-desktop",
+              "cta-light-desktop",
+              "hero-dark-mobile-2x",
+              "hero-light-mobile-2x",
+              "cta-dark-mobile-2x",
+              "cta-light-mobile-2x",
+          }
+          rows = []
+          for report_path in Path("surface-results").rglob("production-wall.json"):
+              report = json.loads(report_path.read_text())
+              scenarios = report.get("scenarios", [])
+              if len(scenarios) != 1:
+                  raise SystemExit(f"{report_path}: expected one scenario, found {len(scenarios)}")
+              scenario = scenarios[0]
+              paired = scenario.get("paired", {})
+              wall = paired.get("wallMeanMs", {}).get("geometricMeanRatio")
+              submit = paired.get("submitMeanMs", {}).get("geometricMeanRatio")
+              drain = paired.get("drainMeanMs", {}).get("geometricMeanRatio")
+              if not all(isinstance(value, (int, float)) and value > 0 for value in (wall, submit, drain)):
+                  raise SystemExit(f"{report_path}: missing positive wall/submit/drain ratios")
+              rows.append({
+                  "name": scenario.get("name"),
+                  "wallRatio": wall,
+                  "fpsMultiplier": 1 / wall,
+                  "submitRatio": submit,
+                  "drainRatio": drain,
+                  "baselineFps": scenario.get("baseline", {}).get("fps", {}).get("median"),
+                  "candidateFps": scenario.get("candidate", {}).get("fps", {}).get("median"),
+              })
+
+          names = {row["name"] for row in rows}
+          if names != expected or len(rows) != len(expected):
+              raise SystemExit(
+                  f"fail-closed: expected {sorted(expected)}, received {sorted(names)} from {len(rows)} reports"
+              )
+
+          geometric = lambda key: math.exp(
+              sum(math.log(row[key]) for row in rows) / len(rows)
+          )
+          wall_ratio = geometric("wallRatio")
+          submit_ratio = geometric("submitRatio")
+          drain_ratio = geometric("drainRatio")
+          worst_wall_ratio = max(row["wallRatio"] for row in rows)
+          result = {
+              "accepted": wall_ratio <= 0.5 and worst_wall_ratio <= 0.75,
+              "wallRatio": wall_ratio,
+              "equivalentFpsMultiplier": 1 / wall_ratio,
+              "submitRatio": submit_ratio,
+              "drainRatio": drain_ratio,
+              "worstWallRatio": worst_wall_ratio,
+              "targetWallRatio": 0.5,
+              "maximumScenarioWallRatio": 0.75,
+              "scenarioCount": len(rows),
+              "scenarios": sorted(rows, key=lambda row: row["name"]),
+          }
+          Path("production-wall-matrix.json").write_text(json.dumps(result, indent=2) + "\n")
+
+          lines = [
+              "# Production wall/FPS matrix",
+              "",
+              f"- Verdict: **{'ACCEPT' if result['accepted'] else 'REJECT'}**",
+              f"- Geometric wall ratio: **{wall_ratio:.4f}**",
+              f"- Equivalent uncapped FPS multiplier: **{1 / wall_ratio:.2f}×**",
+              f"- Geometric submit ratio: **{submit_ratio:.4f}**",
+              f"- Geometric drain ratio: **{drain_ratio:.4f}**",
+              f"- Worst surface wall ratio: **{worst_wall_ratio:.4f}**",
+              "",
+              "| Scenario | Wall ratio | FPS multiplier | Submit ratio | Drain ratio | Baseline FPS | Candidate FPS |",
+              "|---|---:|---:|---:|---:|---:|---:|",
+          ]
+          for row in result["scenarios"]:
+              baseline_fps = row["baselineFps"]
+              candidate_fps = row["candidateFps"]
+              lines.append(
+                  f"| {row['name']} | {row['wallRatio']:.4f} | {row['fpsMultiplier']:.2f}× | "
+                  f"{row['submitRatio']:.4f} | {row['drainRatio']:.4f} | "
+                  f"{baseline_fps:.1f} | {candidate_fps:.1f} |"
+              )
+          Path("production-wall-matrix.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+
+      - name: Publish aggregate summary
+        if: always()
+        run: |
+          test ! -f production-wall-matrix.md \
+            || cat production-wall-matrix.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-wall-matrix-${{ github.sha }}
+          path: |
+            production-wall-matrix.json
+            production-wall-matrix.md
+            surface-results
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Enforce 2x uncapped FPS target
         if: always()
         run: |
@@ -186,12 +325,10 @@ jobs:
           import json
           from pathlib import Path
 
-          path = Path("perf-results/production-wall.json")
+          path = Path("production-wall-matrix.json")
           if not path.exists():
-              raise SystemExit("production-wall report is missing")
-          verdict = json.loads(path.read_text()).get("verdict", {})
-          if verdict.get("accepted") is not True:
-              raise SystemExit(
-                  "production wall target not reached: " + json.dumps(verdict)
-              )
+              raise SystemExit("production-wall matrix report is missing")
+          result = json.loads(path.read_text())
+          if result.get("accepted") is not True:
+              raise SystemExit("production wall target not reached: " + json.dumps(result))
           PY
