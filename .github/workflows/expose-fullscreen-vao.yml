@@ -1,0 +1,58 @@
+name: Expose fullscreen-VAO benchmark
+
+on:
+  pull_request:
+    branches:
+      - perf/major-2x-final-temporal-static-cta
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: expose-fullscreen-vao-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  expose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Resolve matching fullscreen-VAO run
+        id: resolve
+        run: |
+          run_id=""
+          for attempt in $(seq 1 40); do
+            run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow perf-fullscreen-vao.yml \
+              --branch perf/major-2x-fullscreen-vao --event push --limit 20 \
+              --json databaseId,headSha \
+              --jq '.[] | select(.headSha == env.HEAD_SHA) | .databaseId' | head -n 1)
+            test -n "$run_id" && break
+            sleep 5
+          done
+          test -n "$run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+      - name: Follow exact benchmark
+        run: gh run watch "${{ steps.resolve.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" --exit-status
+      - name: Download exact artifact
+        if: always()
+        run: |
+          mkdir -p evidence
+          gh run download "${{ steps.resolve.outputs.run_id }}" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'fullscreen-vao-*' --dir evidence
+      - name: Publish verdicts
+        if: always()
+        run: |
+          visual=$(find evidence -name visual-diff.md -print -quit)
+          evaluation=$(find evidence -name fullscreen-vao-evaluation.json -print -quit)
+          wall=$(find evidence -name production-wall.md -print -quit)
+          test -n "$visual" && cat "$visual" >> "$GITHUB_STEP_SUMMARY"
+          test -n "$wall" && cat "$wall" >> "$GITHUB_STEP_SUMMARY"
+          test -n "$evaluation"
+          printf '\n```json\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$evaluation" >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
