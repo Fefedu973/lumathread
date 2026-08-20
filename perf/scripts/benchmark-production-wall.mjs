@@ -180,7 +180,8 @@ async function main() {
           )} | ${format(row.candidateFps, 1)} |`,
       )
       .join("\n");
-    const markdown = `# Production wall/FPS benchmark\n\n` +
+    const markdown =
+      `# Production wall/FPS benchmark\n\n` +
       `This run keeps one terminal \`gl.finish()\` per measured frame but disables ` +
       `all WebGL call wrappers and per-draw timer queries.\n\n` +
       `- Verdict: **${verdict.accepted ? "ACCEPT" : "REJECT"}**\n` +
@@ -196,10 +197,7 @@ async function main() {
       path.join(options.out, "production-wall.json"),
       `${JSON.stringify(result, null, 2)}\n`,
     );
-    await writeFile(
-      path.join(options.out, "production-wall.md"),
-      markdown,
-    );
+    await writeFile(path.join(options.out, "production-wall.md"), markdown);
     console.log(markdown);
   } finally {
     await chrome.close();
