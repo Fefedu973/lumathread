@@ -19,28 +19,47 @@ if ! grep -q "updateTemporalHeroCache" src/runtime/path-renderer.ts; then
     | base64 --decode \
     | gzip --decompress \
     > /tmp/apply-hero-temporal-interpolation-experiment.mjs
+  set +e
   node /tmp/apply-hero-temporal-interpolation-experiment.mjs
-  temporal_transform_status="applied"
+  temporal_transform_exit=$?
+  set -e
+  if [ "$temporal_transform_exit" -eq 0 ]; then
+    temporal_transform_status="applied"
+  elif grep -q "updateTemporalHeroCache" src/runtime/path-renderer.ts; then
+    temporal_transform_status="completed-from-partial"
+  else
+    echo "Temporal transform failed before producing its required resources." >&2
+    exit "$temporal_transform_exit"
+  fi
 else
   temporal_transform_status="already-materialized"
 fi
+
+node perf/scripts/complete-hero-temporal-scheduling.mjs
 
 git show \
   "$TEMPORAL_FIX_SHA:perf/scripts/fix-hero-temporal-cache-state.mjs" \
   > /tmp/fix-hero-temporal-cache-state.mjs
 node /tmp/fix-hero-temporal-cache-state.mjs
 
-grep -q "updateTemporalHeroCache" src/runtime/path-renderer.ts
-grep -q "temporalHeroSettingsKey" src/runtime/path-renderer.ts
-grep -q "root.quality.quadrature >= 2" src/runtime/path-renderer.ts
-grep -q "temporalSettingsKey" src/rendering/webgl-resources.ts
+for required in \
+  "updateTemporalHeroCache" \
+  "temporalHeroSettingsKey" \
+  "root.quality.quadrature >= 2" \
+  "if (shouldUseTemporalHeroCache(root, preparedSceneFrames))"; do
+  grep -Fq "$required" src/runtime/path-renderer.ts
+ done
+grep -Fq "temporalSettingsKey" src/rendering/webgl-resources.ts
+grep -Fq "temporalFramebuffers" src/rendering/webgl-resources.ts
+grep -Fq "uTemporalMix" src/rendering/shaders.ts
 
 bunx biome format --write \
   src/rendering/shaders.ts \
   src/rendering/webgl-resources.ts \
   src/runtime/resource-manager.ts \
   src/runtime/draw-common.ts \
-  src/runtime/path-renderer.ts
+  src/runtime/path-renderer.ts \
+  perf/scripts/complete-hero-temporal-scheduling.mjs
 
 cat > perf/materialized-final-temporal-stack.txt <<EOF
 base-stack=$BASE_STACK_SHA
