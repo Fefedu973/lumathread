@@ -283,6 +283,22 @@ describe("HDR path target lifecycle", () => {
     expect(presentedSignal).toBeGreaterThan(secondPostRevealFrame);
   });
 
+  test("does not restart the scene fade when glass becomes renderable", () => {
+    const hookSource = readFileSync(
+      "src/runtime/use-hero-wave-renderer.ts",
+      "utf8",
+    );
+    const keyStart = hookSource.indexOf("const sceneFadeConfigKey =");
+    const keyEnd = hookSource.indexOf("const restartSceneFade =", keyStart);
+    const keySource = hookSource.slice(keyStart, keyEnd);
+
+    expect(keyStart).toBeGreaterThan(-1);
+    expect(keyEnd).toBeGreaterThan(keyStart);
+    expect(keySource).toContain("settings.fadeInDuration");
+    expect(keySource).toContain("settings.fadeInAffectsGlassText");
+    expect(keySource).not.toContain("glassCanRender");
+  });
+
   test("invalidates temporal banks when the motion mode changes", () => {
     const source = readFileSync("src/runtime/path-renderer.ts", "utf8");
     const keyStart = source.indexOf("const temporalHeroSettingsKey =");
