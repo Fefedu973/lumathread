@@ -39,7 +39,11 @@ import {
   createMusicVisualizerRuntime,
 } from "../audio/music-runtime";
 
-import { useHeroWaveRenderer } from "./use-hero-wave-renderer";
+import {
+  type HeroWaveFadeMode,
+  resolveHeroWaveFadeMode,
+  useHeroWaveRenderer,
+} from "./use-hero-wave-renderer";
 
 import { useMusicVisualizer } from "../audio/use-music-visualizer";
 import { useGlassTextDomTarget } from "./use-glass-text-dom-target";
@@ -113,6 +117,18 @@ const HdrHeroWaveBackground = forwardRef<
       : resolvedSettings.glassText.text.trim().length > 0);
   const usesIndependentGlassFade =
     glassCanRender && !resolvedSettings.fadeInAffectsGlassText;
+  const fadeModeConfigurationKey = `${fadeInDuration}\u001f${fadeInEasing}\u001f${resolvedSettings.fadeInAffectsGlassText ? 1 : 0}`;
+  const fadeModeRef = useRef<HeroWaveFadeMode>({
+    configurationKey: fadeModeConfigurationKey,
+    usesIndependentGlassFade,
+  });
+  fadeModeRef.current = resolveHeroWaveFadeMode(
+    fadeModeRef.current,
+    fadeModeConfigurationKey,
+    usesIndependentGlassFade,
+  );
+  const lockedUsesIndependentGlassFade =
+    fadeModeRef.current.usesIndependentGlassFade;
   const musicVisualizerConnectionKey = JSON.stringify({
     enabled: resolvedSettings.musicVisualizer.enabled,
     source: resolvedSettings.musicVisualizer.source,
@@ -178,20 +194,20 @@ const HdrHeroWaveBackground = forwardRef<
     settingsRevisionRef,
     musicRuntimeRef,
     callbacksRef,
+    fadeModeRef,
     settingsRef,
     resolvedSettings,
     contextEpoch,
     setContextEpoch,
   });
 
-  const fadeConfigurationKey = `${fadeInDuration}\u001f${fadeInEasing}\u001f${usesIndependentGlassFade ? 1 : 0}`;
-  const previousFadeConfiguration = useRef(fadeConfigurationKey);
+  const previousFadeConfiguration = useRef(fadeModeConfigurationKey);
   useEffect(() => {
-    if (previousFadeConfiguration.current === fadeConfigurationKey) return;
-    previousFadeConfiguration.current = fadeConfigurationKey;
+    if (previousFadeConfiguration.current === fadeModeConfigurationKey) return;
+    previousFadeConfiguration.current = fadeModeConfigurationKey;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (usesIndependentGlassFade) {
+    if (lockedUsesIndependentGlassFade) {
       canvas.dataset.ready = "true";
       canvas.style.opacity = "1";
       invalidateRef.current();
@@ -214,7 +230,7 @@ const HdrHeroWaveBackground = forwardRef<
       cancelAnimationFrame(revealRaf);
       window.clearTimeout(revealTimer);
     };
-  }, [fadeConfigurationKey, usesIndependentGlassFade]);
+  }, [fadeModeConfigurationKey, lockedUsesIndependentGlassFade]);
 
   return (
     <canvas
@@ -233,7 +249,7 @@ const HdrHeroWaveBackground = forwardRef<
         backgroundColor:
           resolvedSettings.theme === "light" ? "#ffffff" : "#020304",
         ...style,
-        transitionDuration: usesIndependentGlassFade
+        transitionDuration: lockedUsesIndependentGlassFade
           ? "0ms"
           : `${fadeInDuration}ms`,
         transitionTimingFunction: fadeInEasing,

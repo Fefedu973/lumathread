@@ -5,6 +5,7 @@ import {
   createResourceManager,
   type HeroWaveResourceState,
 } from "../runtime/resource-manager";
+import { resolveHeroWaveFadeMode } from "../runtime/use-hero-wave-renderer";
 import {
   isTemporalPathBootstrapAligned,
   selectTemporalPathAnchorIndex,
@@ -297,6 +298,28 @@ describe("HDR path target lifecycle", () => {
     expect(keySource).toContain("settings.fadeInDuration");
     expect(keySource).toContain("settings.fadeInAffectsGlassText");
     expect(keySource).not.toContain("glassCanRender");
+  });
+
+  test("keeps one fade mode until its explicit configuration changes", () => {
+    const initial = {
+      configurationKey: "1800 ease-out 0",
+      usesIndependentGlassFade: false,
+    };
+    const lateGlass = resolveHeroWaveFadeMode(
+      initial,
+      initial.configurationKey,
+      true,
+    );
+    const reconfigured = resolveHeroWaveFadeMode(
+      lateGlass,
+      "900 ease-out 0",
+      true,
+    );
+
+    expect(lateGlass).toBe(initial);
+    expect(lateGlass.usesIndependentGlassFade).toBeFalse();
+    expect(reconfigured).not.toBe(initial);
+    expect(reconfigured.usesIndependentGlassFade).toBeTrue();
   });
 
   test("invalidates temporal banks when the motion mode changes", () => {

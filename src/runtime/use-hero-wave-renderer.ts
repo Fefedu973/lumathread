@@ -74,6 +74,20 @@ export interface HeroWaveRendererCallbacks {
   onPerformance: HeroWaveBackgroundProps["onPerformance"];
 }
 
+export interface HeroWaveFadeMode {
+  configurationKey: string;
+  usesIndependentGlassFade: boolean;
+}
+
+export function resolveHeroWaveFadeMode(
+  previous: HeroWaveFadeMode,
+  configurationKey: string,
+  usesIndependentGlassFade: boolean,
+): HeroWaveFadeMode {
+  if (previous.configurationKey === configurationKey) return previous;
+  return { configurationKey, usesIndependentGlassFade };
+}
+
 export interface HeroWaveRendererHookOptions {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   invalidateRef: MutableRefObject<() => void>;
@@ -83,6 +97,7 @@ export interface HeroWaveRendererHookOptions {
   settingsRevisionRef: MutableRefObject<number>;
   musicRuntimeRef: MutableRefObject<MusicVisualizerRuntime>;
   callbacksRef: MutableRefObject<HeroWaveRendererCallbacks>;
+  fadeModeRef: MutableRefObject<HeroWaveFadeMode>;
   settingsRef: MutableRefObject<Settings>;
   resolvedSettings: Settings;
   contextEpoch: number;
@@ -98,6 +113,7 @@ export function useHeroWaveRenderer({
   settingsRevisionRef,
   musicRuntimeRef,
   callbacksRef,
+  fadeModeRef,
   settingsRef,
   resolvedSettings,
   contextEpoch,
@@ -488,14 +504,8 @@ export function useHeroWaveRenderer({
     }
     const pendingGpuTimers: PendingGpuTimer[] = [];
 
-    const glassCanRender = (settings: Settings) =>
-      settings.glassText.enabled &&
-      (settings.glassText.shape === "svg"
-        ? settings.glassText.svgPath.trim().length > 0
-        : settings.glassText.text.trim().length > 0);
-
-    const usesIndependentGlassFade = (settings: Settings) =>
-      glassCanRender(settings) && !settings.fadeInAffectsGlassText;
+    const usesIndependentGlassFade = () =>
+      fadeModeRef.current.usesIndependentGlassFade;
 
     const sceneFadeConfigKey = (settings: Settings) =>
       [
@@ -508,15 +518,13 @@ export function useHeroWaveRenderer({
       sceneFadeKey = sceneFadeConfigKey(settings);
       sceneFadeStartedAt = performance.now();
       sceneFadeProgress =
-        usesIndependentGlassFade(settings) && settings.fadeInDuration > 0
-          ? 0
-          : 1;
+        usesIndependentGlassFade() && settings.fadeInDuration > 0 ? 0 : 1;
     };
 
     const updateSceneFade = (settings: Settings) => {
       const key = sceneFadeConfigKey(settings);
       if (key !== sceneFadeKey) restartSceneFade(settings);
-      if (!usesIndependentGlassFade(settings) || settings.fadeInDuration <= 0) {
+      if (!usesIndependentGlassFade() || settings.fadeInDuration <= 0) {
         sceneFadeProgress = 1;
         return;
       }
@@ -531,8 +539,8 @@ export function useHeroWaveRenderer({
       );
     };
 
-    const sceneFadeNeedsAnimation = (settings: Settings) =>
-      usesIndependentGlassFade(settings) && sceneFadeProgress < 0.9999;
+    const sceneFadeNeedsAnimation = () =>
+      usesIndependentGlassFade() && sceneFadeProgress < 0.9999;
 
     const emitPerformanceSample = (sample: HeroWavePerformanceSample) => {
       callbacksRef.current.onPerformance?.(sample);
@@ -1058,7 +1066,7 @@ export function useHeroWaveRenderer({
         !root.paused &&
         !manualPausedRef.current &&
         (followNeedsAnimation(scene) || disturbanceNeedsAnimation(scene));
-      if (clockRuns || interactionRuns || sceneFadeNeedsAnimation(root)) {
+      if (clockRuns || interactionRuns || sceneFadeNeedsAnimation()) {
         requestFrame();
       }
     }
