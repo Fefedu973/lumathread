@@ -67,7 +67,9 @@ if (!surface) {
   throw new Error(`Unknown cold-start surface: ${requestedSurface}`);
 }
 if (!Number.isInteger(repeats) || repeats < 2) {
-  throw new Error(`Cold-start repeats must be an integer >= 2, received ${repeats}`);
+  throw new Error(
+    `Cold-start repeats must be an integer >= 2, received ${repeats}`,
+  );
 }
 
 const median = (values) => {
@@ -114,7 +116,9 @@ async function measureSide(baseUrl, side, repeat) {
       throw new Error(`${side}: canvas did not report ready`);
     }
     if (browser.rendererErrors?.length) {
-      throw new Error(`${side}: renderer errors: ${JSON.stringify(browser.rendererErrors)}`);
+      throw new Error(
+        `${side}: renderer errors: ${JSON.stringify(browser.rendererErrors)}`,
+      );
     }
     return {
       side,
@@ -135,10 +139,11 @@ async function measureSide(baseUrl, side, repeat) {
 await mkdir(out, { recursive: true });
 const raw = { baseline: [], candidate: [] };
 for (let repeat = 0; repeat < repeats; repeat += 1) {
-  const order = repeat % 2 === 0
-    ? ["baseline", "candidate"]
-    : ["candidate", "baseline"];
-  console.log(`Cold-start repeat ${repeat + 1}/${repeats}: ${order.join(" → ")}`);
+  const order =
+    repeat % 2 === 0 ? ["baseline", "candidate"] : ["candidate", "baseline"];
+  console.log(
+    `Cold-start repeat ${repeat + 1}/${repeats}: ${order.join(" → ")}`,
+  );
   for (const side of order) {
     raw[side].push(
       await measureSide(
@@ -152,9 +157,7 @@ for (let repeat = 0; repeat < repeats; repeat += 1) {
 
 const aggregate = (runs) => {
   const counterMedian = (name) =>
-    median(
-      runs.map((run) => Number(run.gl?.counters?.[name] ?? 0)),
-    );
+    median(runs.map((run) => Number(run.gl?.counters?.[name] ?? 0)));
   return {
     browserStartedMs: median(runs.map((run) => run.browserStartedMs)),
     hostReadyMs: median(runs.map((run) => run.hostReadyMs)),

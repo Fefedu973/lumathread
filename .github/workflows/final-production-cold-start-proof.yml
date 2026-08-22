@@ -3,10 +3,10 @@ name: Final production cold-start proof
 on:
   push:
     branches:
-      - perf/final-production-renderer
+      - perf/final-validated-renderer
     paths:
       - src/**
-      - perf/final-production-renderer.json
+      - perf/final-renderer-provenance.md
       - perf/scripts/benchmark-final-cold-start.mjs
       - .github/workflows/final-production-cold-start-proof.yml
   workflow_dispatch:
@@ -52,7 +52,7 @@ jobs:
       - name: Install and validate candidate
         run: |
           bun install --frozen-lockfile
-          test -f perf/final-production-renderer.json
+          test -f perf/final-renderer-provenance.md
           bun run check
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
@@ -67,6 +67,11 @@ jobs:
         run: |
           cd baseline
           bun install --frozen-lockfile
+          cd ..
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
           bun run check
           cd ..
           mkdir -p baseline/perf
@@ -138,7 +143,7 @@ jobs:
           mkdir -p cold-start-results/server-logs cold-start-results/candidate
           cp /tmp/baseline.log cold-start-results/server-logs/ 2>/dev/null || true
           cp /tmp/candidate.log cold-start-results/server-logs/ 2>/dev/null || true
-          cp perf/final-production-renderer.json cold-start-results/candidate/
+          cp perf/final-renderer-provenance.md cold-start-results/candidate/
 
       - name: Upload cold-start surface proof
         if: always()

@@ -31,6 +31,7 @@ jobs:
           python - <<'PY'
           import json
           import subprocess
+          import subprocess
           import time
           from pathlib import Path
 
@@ -40,6 +41,7 @@ jobs:
               "direct": "Final committed renderer proof",
               "wall": "Final uninstrumented wall and FPS proof",
               "pointer": "Final CTA pointer transition proof",
+              "cold": "Final production cold-start proof",
           }
           current = subprocess.check_output(
               ["git", "rev-parse", "HEAD"], text=True
@@ -140,6 +142,9 @@ jobs:
           pointer, pointer_path = find_json(
               "collected/pointer", "final-pointer-recovery.json"
           )
+          cold, cold_path = find_json(
+              "collected/cold", "final-cold-start-proof.json"
+          )
 
           visual_candidates = list(Path("collected/direct").rglob("visual-diff.json"))
           if len(visual_candidates) != 1:
@@ -156,9 +161,25 @@ jobs:
               raise SystemExit("direct half-GPU proof did not pass")
           if pointer.get("passed") is not True:
               raise SystemExit("pointer fallback/recovery proof did not pass")
+          if cold.get("accepted") is not True:
+              raise SystemExit("cold-start/resource budget proof did not pass")
+          wall_ratio = wall.get("wallRatio")
+          worst_wall_ratio = wall.get("worstWallRatio")
+          if not (
+              isinstance(wall_ratio, (int, float))
+              and wall_ratio < 1
+              and isinstance(worst_wall_ratio, (int, float))
+              and worst_wall_ratio <= 1.03
+          ):
+              raise SystemExit("production wall benchmark did not prove a safe improvement")
+
+          source_tree_sha = subprocess.check_output(
+              ["git", "rev-parse", "HEAD:src"], text=True
+          ).strip()
 
           result = {
               "sourceSha": runs["direct"]["head_sha"],
+              "sourceTreeSha": source_tree_sha,
               "proofRuns": {
                   key: {
                       "id": run["id"],
@@ -171,14 +192,18 @@ jobs:
               "accepted": True,
               "gpuTargetReached": direct.get("accepted") is True,
               "fpsTargetReached": wall.get("targetReached") is True,
+              "productionWallAccepted": True,
+              "coldStartAccepted": cold.get("accepted") is True,
               "direct": direct,
               "productionWall": wall,
               "pointerRecovery": pointer,
+              "coldStart": cold,
               "visual": visual,
               "sourceReports": {
                   "direct": direct_path,
                   "wall": wall_path,
                   "pointer": pointer_path,
+                  "cold": cold_path,
                   "visual": str(visual_candidates[0]),
               },
           }
@@ -199,12 +224,15 @@ jobs:
               f"- Visual parity: **PASS**",
               f"- Half-GPU target: **{'REACHED' if result['gpuTargetReached'] else 'NOT REACHED'}**",
               f"- 2× uncapped-FPS target: **{'REACHED' if result['fpsTargetReached'] else 'NOT REACHED'}**",
+              f"- Cold-start/resource budget: **{'PASS' if result['coldStartAccepted'] else 'FAIL'}**",
               f"- All-surface GPU ratio: **{overall['gpuRatio']:.4f}** ({overall['gpuReductionPercent']:.1f}% reduction)",
               f"- Instrumented all-surface wall ratio: **{overall['wallRatio']:.4f}** ({overall['fpsMultiplier']:.2f}×)",
               f"- Uninstrumented production wall ratio: **{wall['wallRatio']:.4f}** ({wall['equivalentFpsMultiplier']:.2f}×)",
               f"- Hero GPU ratio: **{hero['gpuRatio']:.4f}**",
               f"- CTA GPU ratio: **{cta['gpuRatio']:.4f}**",
               f"- Pointer recovered/active draw ratio: **{pointer['geometricRecoveredToActiveDrawRatio']:.4f}**",
+              f"- Cold-start host-ready ratio: **{cold['geometricHostReadyRatio']:.4f}**",
+              f"- Worst cold-start surface ratio: **{cold['worstSurfaceHostReadyRatio']:.4f}**",
               "",
               "## Direct original-to-final scenarios",
               "",
@@ -237,6 +265,7 @@ jobs:
               f"- Direct proof: {runs['direct']['html_url']}",
               f"- Wall/FPS proof: {runs['wall']['html_url']}",
               f"- Pointer proof: {runs['pointer']['html_url']}",
+              f"- Cold-start/resource proof: {runs['cold']['html_url']}",
               "",
               "The absolute values use ANGLE/SwiftShader; the paired ratios compare both builds in the same environment.",
           ]
