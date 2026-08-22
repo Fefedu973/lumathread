@@ -57,7 +57,7 @@ for (const marker of [
   "const temporalSceneStability = new WeakMap",
   "const anchoredSceneIsStable =",
   "const shouldUseTemporalPathCache =",
-  "root.motionMode === \"anchored\" ? 10 : 15",
+  'root.motionMode === "anchored" ? 10 : 15',
   "shouldUseTemporalPathCache(resources, root, preparedSceneFrames)",
 ]) {
   if (!source.includes(marker)) {
@@ -65,4 +65,6 @@ for (const marker of [
   }
 }
 
-console.log("Applied final validated Hero 15 Hz / idle CTA 10 Hz renderer selector.");
+console.log(
+  "Applied final validated Hero 15 Hz / idle CTA 10 Hz renderer selector.",
+);

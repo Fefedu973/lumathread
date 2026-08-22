@@ -35,7 +35,7 @@ if (!suite.includes(steadyCaptureMarker)) {
   if (!steadySteps) query.set("time", String(snapshot.time));
   const page = await openPage(
     chrome,
-    \`${"${baseUrl}"}/?${"${query.toString()}"}\`,
+    baseUrl + "/?" + query.toString(),
     snapshot.viewport,
   );
   try {

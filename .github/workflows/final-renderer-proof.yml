@@ -38,7 +38,7 @@ jobs:
           grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
             src/runtime/path-renderer.ts
           grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
-            src/rendering/shaders.ts
+            src/rendering/path-shaders.ts
           test -f perf/final-renderer-provenance.md
 
       - name: Set up Bun

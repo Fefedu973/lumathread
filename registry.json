@@ -121,6 +121,11 @@
           "target": "@ui/lumathread/rendering/profile-textures.ts"
         },
         {
+          "path": "src/rendering/path-shaders.ts",
+          "type": "registry:ui",
+          "target": "@ui/lumathread/rendering/path-shaders.ts"
+        },
+        {
           "path": "src/rendering/shaders.ts",
           "type": "registry:ui",
           "target": "@ui/lumathread/rendering/shaders.ts"
