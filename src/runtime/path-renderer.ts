@@ -854,6 +854,7 @@ export function createPathRenderer(
     return [
       resourceState.canvasWidth,
       resourceState.canvasHeight,
+      root.motionMode,
       root.timeOffset,
       root.filamentPlaybackRate,
       root.speed,

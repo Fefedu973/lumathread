@@ -259,4 +259,15 @@ describe("HDR path target lifecycle", () => {
     expect(secondPostRevealFrame).toBeGreaterThan(firstPostRevealFrame);
     expect(presentedSignal).toBeGreaterThan(secondPostRevealFrame);
   });
+
+  test("invalidates temporal banks when the motion mode changes", () => {
+    const source = readFileSync("src/runtime/path-renderer.ts", "utf8");
+    const keyStart = source.indexOf("const temporalHeroSettingsKey =");
+    const keyEnd = source.indexOf("const updateTemporalHeroCache =", keyStart);
+    const motionModeKey = source.indexOf("root.motionMode", keyStart);
+    expect(keyStart).toBeGreaterThan(-1);
+    expect(keyEnd).toBeGreaterThan(keyStart);
+    expect(motionModeKey).toBeGreaterThan(keyStart);
+    expect(motionModeKey).toBeLessThan(keyEnd);
+  });
 });
