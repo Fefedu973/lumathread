@@ -162,7 +162,7 @@ jobs:
           if pointer.get("passed") is not True:
               raise SystemExit("pointer fallback/recovery proof did not pass")
           if cold.get("accepted") is not True:
-              raise SystemExit("cold-start/resource budget proof did not pass")
+              raise SystemExit("cold-start timing budget proof did not pass")
           wall_ratio = wall.get("wallRatio")
           worst_wall_ratio = wall.get("worstWallRatio")
           if not (
@@ -224,7 +224,7 @@ jobs:
               f"- Visual parity: **PASS**",
               f"- Half-GPU target: **{'REACHED' if result['gpuTargetReached'] else 'NOT REACHED'}**",
               f"- 2× uncapped-FPS target: **{'REACHED' if result['fpsTargetReached'] else 'NOT REACHED'}**",
-              f"- Cold-start/resource budget: **{'PASS' if result['coldStartAccepted'] else 'FAIL'}**",
+              f"- Cold-start timing budget: **{'PASS' if result['coldStartAccepted'] else 'FAIL'}**",
               f"- All-surface GPU ratio: **{overall['gpuRatio']:.4f}** ({overall['gpuReductionPercent']:.1f}% reduction)",
               f"- Instrumented all-surface wall ratio: **{overall['wallRatio']:.4f}** ({overall['fpsMultiplier']:.2f}×)",
               f"- Uninstrumented production wall ratio: **{wall['wallRatio']:.4f}** ({wall['equivalentFpsMultiplier']:.2f}×)",
@@ -265,7 +265,7 @@ jobs:
               f"- Direct proof: {runs['direct']['html_url']}",
               f"- Wall/FPS proof: {runs['wall']['html_url']}",
               f"- Pointer proof: {runs['pointer']['html_url']}",
-              f"- Cold-start/resource proof: {runs['cold']['html_url']}",
+              f"- Cold-start timing/allocation-audit proof: {runs['cold']['html_url']}",
               "",
               "The absolute values use ANGLE/SwiftShader; the paired ratios compare both builds in the same environment.",
           ]
@@ -286,6 +286,3 @@ jobs:
           else
             echo "Final report is already current."
           fi
-
-      - name: Publish the validated delivery PR
-        run: gh workflow run finalize-renderer-delivery.yml --ref perf/final-validated-renderer

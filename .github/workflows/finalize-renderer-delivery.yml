@@ -11,6 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  checks: read
   contents: read
   pull-requests: write
   issues: write
@@ -44,19 +45,62 @@ jobs:
           if report.get("gpuTargetReached") is not True:
               raise SystemExit("the required half-GPU target was not reached")
           if report.get("coldStartAccepted") is not True:
-              raise SystemExit("the cold-start/resource budget was not accepted")
+              raise SystemExit("the cold-start timing budget was not accepted")
           if report.get("productionWallAccepted") is not True:
               raise SystemExit("the production wall benchmark was not accepted")
           PY
 
-      - name: Update and publish the final PR
+      - name: Verify the PR target and current CI
         run: |
-          final_pr=$(gh pr list \
+          gh pr list \
             --repo Fefedu973/lumathread \
             --head perf/final-validated-renderer \
             --state open \
-            --json number \
-            --jq '.[0].number')
+            --json number,baseRefName,headRefOid \
+            > /tmp/final-pr.json
+          current_head=$(git rev-parse HEAD)
+          python - "$current_head" <<'PY' > /tmp/final-pr-number
+          import json, sys
+          rows = json.load(open("/tmp/final-pr.json"))
+          if len(rows) != 1:
+              raise SystemExit(f"expected exactly one final delivery PR, found {len(rows)}")
+          row = rows[0]
+          if row.get("baseRefName") != "main":
+              raise SystemExit(f"final delivery PR targets {row.get('baseRefName')}, not main")
+          if row.get("headRefOid") != sys.argv[1]:
+              raise SystemExit("final delivery PR head does not match the checked-out commit")
+          print(row["number"])
+          PY
+          python - "$current_head" <<'PY'
+          import json, subprocess, sys, time
+          head = sys.argv[1]
+          deadline = time.time() + 900
+          while time.time() < deadline:
+              payload = json.loads(subprocess.check_output([
+                  "gh", "api",
+                  f"repos/Fefedu973/lumathread/commits/{head}/check-runs",
+              ], text=True))
+              checks = [
+                  check for check in payload.get("check_runs", [])
+                  if check.get("name") == "validate"
+              ]
+              if any(check.get("conclusion") == "success" for check in checks):
+                  break
+              failures = [
+                  check.get("conclusion") for check in checks
+                  if check.get("status") == "completed"
+                  and check.get("conclusion") != "success"
+              ]
+              if failures:
+                  raise SystemExit(f"current CI validation failed: {failures}")
+              time.sleep(10)
+          else:
+              raise SystemExit("timed out waiting for current CI validation")
+          PY
+
+      - name: Update and publish the final PR
+        run: |
+          final_pr=$(cat /tmp/final-pr-number)
           test -n "$final_pr"
           {
             cat <<'EOF'
@@ -65,7 +109,7 @@ jobs:
           This PR commits the optimized `src/` tree itself. It does not rely on CI-only transforms at runtime or after merge.
 
           The exact source SHA was compared directly with the frozen original renderer on Hero/CTA, dark/light and desktop/mobile DPR 2 surfaces. Pointer entry, movement, leave, settling and cache recovery are covered independently.
-          Cold-start timing and WebGL resource allocation are also checked against explicit regression budgets.
+          Cold-start timing is checked against explicit regression budgets; WebGL resource allocation is recorded as an audit so its runtime tradeoff stays visible.
 
           EOF
             cat perf/final-renderer-results.md

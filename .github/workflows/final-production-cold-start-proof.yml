@@ -25,7 +25,10 @@ jobs:
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      max-parallel: 8
+      # Fresh Chrome launches are deliberately expensive. Limiting concurrent
+      # surfaces keeps shared-runner contention from dominating the paired
+      # renderer measurements.
+      max-parallel: 2
       matrix:
         surface:
           - hero-dark-desktop
@@ -112,7 +115,7 @@ jobs:
             --candidate http://127.0.0.1:4174 \
             --out cold-start-results \
             --surface "${{ matrix.surface }}" \
-            --repeats 4
+            --repeats 8
 
       - name: Validate surface report
         run: |
@@ -123,12 +126,19 @@ jobs:
           expected = "${{ matrix.surface }}"
           if report.get("surface") != expected:
               raise SystemExit(f"expected {expected}, received {report.get('surface')}")
-          if report.get("repeats") != 4:
+          if report.get("repeats") != 8:
               raise SystemExit("cold-start repeat count is incomplete")
           for key in ("hostReady", "browserReady"):
               value = report.get("ratios", {}).get(key)
               if not isinstance(value, (int, float)) or value <= 0:
                   raise SystemExit(f"missing positive {key} ratio")
+              pairs = report.get("pairedRatios", {}).get(key)
+              if not (
+                  isinstance(pairs, list)
+                  and len(pairs) == 8
+                  and all(isinstance(pair, (int, float)) and pair > 0 for pair in pairs)
+              ):
+                  raise SystemExit(f"expected 8 positive paired {key} ratios")
           PY
 
       - name: Publish surface cold-start summary
@@ -174,7 +184,7 @@ jobs:
           path: surface-results
           merge-multiple: false
 
-      - name: Aggregate startup and allocation ratios fail-closed
+      - name: Aggregate startup timing and allocation audit fail-closed
         run: |
           python - <<'PY'
           import json, math
@@ -196,15 +206,28 @@ jobs:
               ratios = report.get("ratios", {})
               host = ratios.get("hostReady")
               browser = ratios.get("browserReady")
+              host_pairs = report.get("pairedRatios", {}).get("hostReady")
               if not all(
                   isinstance(value, (int, float)) and value > 0
                   for value in (host, browser)
               ):
                   raise SystemExit(f"{path}: incomplete ready ratios")
+              if not (
+                  isinstance(host_pairs, list)
+                  and len(host_pairs) == 8
+                  and all(
+                      isinstance(value, (int, float)) and value > 0
+                      for value in host_pairs
+                  )
+              ):
+                  raise SystemExit(f"{path}: incomplete paired host-ready ratios")
               rows.append({
                   "name": report.get("surface"),
                   "hostReadyRatio": host,
                   "browserReadyRatio": browser,
+                  "hostPairsWithinSurfaceBudget": sum(
+                      value <= 1.30 for value in host_pairs
+                  ),
                   "createProgramRatio": ratios.get("createProgram"),
                   "createTextureRatio": ratios.get("createTexture"),
                   "createFramebufferRatio": ratios.get("createFramebuffer"),
@@ -226,13 +249,23 @@ jobs:
           host_ratio = geometric("hostReadyRatio")
           browser_ratio = geometric("browserReadyRatio")
           worst_host = max(row["hostReadyRatio"] for row in rows)
+          tail_accepted = all(
+              row["hostPairsWithinSurfaceBudget"] >= 6 for row in rows
+          )
           result = {
-              "accepted": host_ratio <= 1.15 and worst_host <= 1.30,
+              "accepted": (
+                  host_ratio <= 1.15
+                  and worst_host <= 1.30
+                  and tail_accepted
+              ),
               "geometricHostReadyRatio": host_ratio,
               "geometricBrowserReadyRatio": browser_ratio,
               "worstSurfaceHostReadyRatio": worst_host,
               "maximumGeometricRegression": 0.15,
               "maximumSurfaceRegression": 0.30,
+              "minimumPairsWithinSurfaceBudget": 6,
+              "pairsPerSurface": 8,
+              "tailAccepted": tail_accepted,
               "scenarioCount": len(rows),
               "scenarios": sorted(rows, key=lambda row: row["name"]),
           }
@@ -240,22 +273,24 @@ jobs:
               json.dumps(result, indent=2) + "\n"
           )
           lines = [
-              "# Final cold-start and allocation proof",
+              "# Final cold-start timing proof and allocation audit",
               "",
               f"- Verdict: **{'ACCEPT' if result['accepted'] else 'REJECT'}**",
               f"- Geometric host ready ratio: **{host_ratio:.4f}**",
               f"- Geometric browser ready ratio: **{browser_ratio:.4f}**",
               f"- Worst surface host ready ratio: **{worst_host:.4f}**",
+              f"- Every surface has at least 6/8 paired ratios ≤ 1.30: **{'PASS' if tail_accepted else 'FAIL'}**",
               "",
-              "| Scenario | Host ready ratio | Browser ready ratio | Texture count ratio | Framebuffer count ratio | Texture-upload pixels ratio |",
-              "|---|---:|---:|---:|---:|---:|",
+              "| Scenario | Host ready ratio | Browser ready ratio | Pairs ≤ 1.30 | Program count ratio | Texture count ratio | Framebuffer count ratio | Texture-upload pixels ratio |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|",
           ]
           for row in result["scenarios"]:
               def fmt(value):
                   return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
               lines.append(
                   f"| {row['name']} | {row['hostReadyRatio']:.4f} | "
-                  f"{row['browserReadyRatio']:.4f} | {fmt(row['createTextureRatio'])} | "
+                  f"{row['browserReadyRatio']:.4f} | {row['hostPairsWithinSurfaceBudget']}/8 | "
+                  f"{fmt(row['createProgramRatio'])} | {fmt(row['createTextureRatio'])} | "
                   f"{fmt(row['createFramebufferRatio'])} | {fmt(row['textureUploadPixelsRatio'])} |"
               )
           Path("final-cold-start-proof.md").write_text("\n".join(lines) + "\n")

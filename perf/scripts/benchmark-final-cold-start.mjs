@@ -17,7 +17,7 @@ const baselineUrl = readArg("--baseline", "http://127.0.0.1:4173");
 const candidateUrl = readArg("--candidate", "http://127.0.0.1:4174");
 const out = readArg("--out", "cold-start-results");
 const requestedSurface = readArg("--surface", "hero-dark-desktop");
-const repeats = Number(readArg("--repeats", "4"));
+const repeats = Number(readArg("--repeats", "8"));
 
 const surfaces = {
   "hero-dark-desktop": {
@@ -176,8 +176,47 @@ const aggregate = (runs) => {
 
 const baseline = aggregate(raw.baseline);
 const candidate = aggregate(raw.candidate);
-const ratio = (key) =>
-  baseline[key] > 0 ? candidate[key] / baseline[key] : null;
+const counterValue = (run, name) => Number(run.gl?.counters?.[name] ?? 0);
+const metricReaders = {
+  browserStarted: (run) => run.browserStartedMs,
+  hostReady: (run) => run.hostReadyMs,
+  browserReady: (run) => run.browserReadyMs,
+  createProgram: (run) => counterValue(run, "createProgram"),
+  createTexture: (run) => counterValue(run, "createTexture"),
+  createFramebuffer: (run) => counterValue(run, "createFramebuffer"),
+  bufferBytes: (run) => counterValue(run, "bufferBytes"),
+  textureUploadPixels: (run) => counterValue(run, "textureUploadPixels"),
+};
+const candidateByRepeat = new Map(
+  raw.candidate.map((run) => [run.repeat, run]),
+);
+const pairedRatios = Object.fromEntries(
+  Object.entries(metricReaders).map(([key, readMetric]) => {
+    const values = raw.baseline.map((baselineRun) => {
+      const candidateRun = candidateByRepeat.get(baselineRun.repeat);
+      if (!candidateRun) {
+        throw new Error(
+          `Missing candidate cold-start run for repeat ${baselineRun.repeat}.`,
+        );
+      }
+      const baselineValue = readMetric(baselineRun);
+      const candidateValue = readMetric(candidateRun);
+      if (!(baselineValue > 0) || !(candidateValue > 0)) {
+        throw new Error(
+          `Cold-start metric ${key} must be positive for repeat ${baselineRun.repeat}.`,
+        );
+      }
+      return candidateValue / baselineValue;
+    });
+    if (values.length !== repeats) {
+      throw new Error(
+        `Cold-start metric ${key} has ${values.length} pair(s); expected ${repeats}.`,
+      );
+    }
+    return [key, values];
+  }),
+);
+const ratio = (key) => median(pairedRatios[key]);
 const result = {
   generatedAt: new Date().toISOString(),
   surface: requestedSurface,
@@ -185,10 +224,11 @@ const result = {
   raw,
   baseline,
   candidate,
+  pairedRatios,
   ratios: {
-    browserStarted: ratio("browserStartedMs"),
-    hostReady: ratio("hostReadyMs"),
-    browserReady: ratio("browserReadyMs"),
+    browserStarted: ratio("browserStarted"),
+    hostReady: ratio("hostReady"),
+    browserReady: ratio("browserReady"),
     createProgram: ratio("createProgram"),
     createTexture: ratio("createTexture"),
     createFramebuffer: ratio("createFramebuffer"),
@@ -203,7 +243,7 @@ const format = (value, digits = 2) =>
     : "n/a";
 const markdown = `# Cold-start proof: ${requestedSurface}
 
-| Metric | Original | Final | Ratio |
+| Metric | Original median | Final median | Paired median ratio |
 |---|---:|---:|---:|
 | Host navigation → ready (ms) | ${format(baseline.hostReadyMs)} | ${format(candidate.hostReadyMs)} | ${format(result.ratios.hostReady, 4)} |
 | Browser navigation → ready (ms) | ${format(baseline.browserReadyMs)} | ${format(candidate.browserReadyMs)} | ${format(result.ratios.browserReady, 4)} |

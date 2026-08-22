@@ -44,6 +44,85 @@ async function resetMeasurements(page) {
   );
 }
 
+const GPU_QUERY_DRAIN_ATTEMPTS = 1_000;
+const GPU_QUERY_DRAIN_INTERVAL_MS = 10;
+
+function gpuTotalFrameMeanMs(profile) {
+  if (Number.isFinite(profile?.totalFrameMeanMs)) {
+    return profile.totalFrameMeanMs;
+  }
+  if (!(profile?.frameCount > 0)) return null;
+  const stageTotalMs = Object.values(profile.byStage ?? {}).reduce(
+    (sum, stage) => sum + (Number.isFinite(stage?.totalMs) ? stage.totalMs : 0),
+    0,
+  );
+  return stageTotalMs > 0 ? stageTotalMs / profile.frameCount : null;
+}
+
+async function drainGpuProfiler(page, expectedFrameCount) {
+  let profile = null;
+  for (let attempt = 1; attempt <= GPU_QUERY_DRAIN_ATTEMPTS; attempt += 1) {
+    profile = await evaluate(
+      page.client,
+      `(() => {
+        const profiler = window.__LUMATHREAD_GPU_PROFILER__;
+        if (!profiler) return null;
+        profiler.collect();
+        const snapshot = profiler.snapshot();
+        const counters = window.__LUMATHREAD_GL_STATS__?.counters ?? {};
+        const expectedSampleCount = [
+          "drawArrays",
+          "drawArraysInstanced",
+          "drawElements",
+          "drawElementsInstanced",
+        ].reduce((sum, name) => sum + (Number(counters[name]) || 0), 0);
+        return { ...snapshot, expectedSampleCount };
+      })()`,
+    );
+    if (!profile) {
+      throw new Error("GPU profiler is unavailable.");
+    }
+    if (!profile.supported) {
+      throw new Error("GPU timer-query extension is unavailable.");
+    }
+    if (profile.errors?.length) {
+      throw new Error(
+        `GPU profiler reported errors: ${profile.errors.join(" | ")}`,
+      );
+    }
+    if (profile.disjointCount > 0) {
+      throw new Error(
+        `GPU timer queries became disjoint ${profile.disjointCount} time(s).`,
+      );
+    }
+    if (profile.pendingCount === 0) {
+      if (profile.frameCount !== expectedFrameCount) {
+        throw new Error(
+          `GPU profiler counted ${profile.frameCount} frame(s); expected ${expectedFrameCount}.`,
+        );
+      }
+      const totalFrameMeanMs = gpuTotalFrameMeanMs(profile);
+      if (!(profile.sampleCount > 0) || !(totalFrameMeanMs > 0)) {
+        throw new Error(
+          `GPU profiler drained without positive samples (samples=${profile.sampleCount}, totalFrameMeanMs=${totalFrameMeanMs}).`,
+        );
+      }
+      if (profile.sampleCount !== profile.expectedSampleCount) {
+        throw new Error(
+          `GPU profiler collected ${profile.sampleCount} sample(s); expected ${profile.expectedSampleCount} measured draw(s).`,
+        );
+      }
+      return profile;
+    }
+    if (attempt < GPU_QUERY_DRAIN_ATTEMPTS) {
+      await sleep(GPU_QUERY_DRAIN_INTERVAL_MS);
+    }
+  }
+  throw new Error(
+    `GPU timer queries did not drain after ${GPU_QUERY_DRAIN_ATTEMPTS} attempts (${profile?.pendingCount ?? "unknown"} pending).`,
+  );
+}
+
 async function collectPayload(page) {
   return evaluate(
     page.client,
@@ -102,6 +181,7 @@ async function runSingleBenchmark(
     const metricsAfter = metricsToObject(
       await page.client.call("Performance.getMetrics"),
     );
+    await drainGpuProfiler(page, frameCount);
     const payload = await collectPayload(page);
     return summarizeRun(payload, metricsBefore, metricsAfter, stepSamples);
   } finally {
@@ -171,6 +251,9 @@ async function runPairedBenchmark(
       metricsAfter[build] = metricsToObject(
         await pages[build].client.call("Performance.getMetrics"),
       );
+    }
+    for (const build of initialOrder) {
+      await drainGpuProfiler(pages[build], frameCount);
       payloads[build] = await collectPayload(pages[build]);
     }
 
@@ -225,6 +308,9 @@ function aggregateRuns(runs) {
     taskDurationMs: aggregate((run) => run.browser.taskDurationMs),
     scriptDurationMs: aggregate((run) => run.browser.scriptDurationMs),
     jsHeapUsedBytes: aggregate((run) => run.browser.jsHeapUsedBytes),
+    gpuTotalFrameMs: aggregate((run) =>
+      gpuTotalFrameMeanMs(run.gl?.gpuProfile),
+    ),
     glPerFrame: counters,
     renderer: runs[0]?.renderer ?? null,
     webgl: runs[0]?.webgl ?? null,
@@ -323,6 +409,9 @@ function comparePairedRuns(baselineRuns, candidateRuns) {
       baselineRuns,
       candidateRuns,
       (run) => run.drainMs.mean,
+    ),
+    gpuTotalFrameMs: pairedRatioSummary(baselineRuns, candidateRuns, (run) =>
+      gpuTotalFrameMeanMs(run.gl?.gpuProfile),
     ),
   };
 }

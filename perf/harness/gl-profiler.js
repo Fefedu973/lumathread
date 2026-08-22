@@ -204,6 +204,23 @@
       state.active = null;
       state.ordinals.clear();
     };
+    const snapshot = () => {
+      collect();
+      const totalMs = state.samples.reduce((sum, sample) => sum + sample.ms, 0);
+      return {
+        supported: Boolean(extension),
+        extension: extension ? "EXT_disjoint_timer_query_webgl2" : null,
+        frameCount: state.frame,
+        pendingCount: state.pending.length,
+        sampleCount: state.samples.length,
+        disjointCount: state.disjointCount,
+        errors: [...state.errors],
+        totalMs,
+        totalFrameMeanMs: state.frame > 0 ? totalMs / state.frame : null,
+        byStage: summarize(state.samples, state.frame, "stage"),
+        byDraw: summarize(state.samples, state.frame, "label"),
+      };
+    };
     wrap("shaderSource", ([shader, source]) => {
       const stage = typeof source === "string" ? classifyShader(source) : null;
       if (shader && stage) shaderStages.set(shader, stage);
@@ -246,20 +263,7 @@
       },
       collect,
       reset,
-      snapshot() {
-        collect();
-        return {
-          supported: Boolean(extension),
-          extension: extension ? "EXT_disjoint_timer_query_webgl2" : null,
-          frameCount: state.frame,
-          pendingCount: state.pending.length,
-          sampleCount: state.samples.length,
-          disjointCount: state.disjointCount,
-          errors: [...state.errors],
-          byStage: summarize(state.samples, state.frame, "stage"),
-          byDraw: summarize(state.samples, state.frame, "label"),
-        };
-      },
+      snapshot,
     };
     contexts.push(context);
   };
@@ -289,6 +293,8 @@
     sampleCount: 0,
     disjointCount: 0,
     errors: [],
+    totalMs: 0,
+    totalFrameMeanMs: null,
     byStage: {},
     byDraw: {},
   });
