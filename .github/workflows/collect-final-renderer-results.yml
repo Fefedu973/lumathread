@@ -31,7 +31,6 @@ jobs:
           python - <<'PY'
           import json
           import subprocess
-          import subprocess
           import time
           from pathlib import Path
 
@@ -122,6 +121,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import subprocess
           from pathlib import Path
 
           def find_json(root, name):

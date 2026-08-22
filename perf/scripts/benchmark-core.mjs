@@ -338,7 +338,15 @@ async function waitForHarness(client) {
   throw new Error("Harness did not become ready with the HDR renderer.");
 }
 
-async function dispatchPointer(client, scenario, phase) {
+async function dispatchPointer(
+  client,
+  scenario,
+  phase,
+  eventTimeMilliseconds = null,
+) {
+  const eventTime = Number.isFinite(eventTimeMilliseconds)
+    ? eventTimeMilliseconds
+    : null;
   await evaluate(
     client,
     `(() => {
@@ -358,9 +366,16 @@ async function dispatchPointer(client, scenario, phase) {
         bubbles: true,
         composed: true,
       };
-      canvas?.dispatchEvent(new PointerEvent("pointermove", init));
-      target.dispatchEvent(new PointerEvent("pointermove", init));
-      window.dispatchEvent(new PointerEvent("pointermove", init));
+      const createEvent = () => {
+        const event = new PointerEvent("pointermove", init);
+        if (${eventTime} !== null) {
+          Object.defineProperty(event, "timeStamp", { value: ${eventTime} });
+        }
+        return event;
+      };
+      canvas?.dispatchEvent(createEvent());
+      target.dispatchEvent(createEvent());
+      window.dispatchEvent(createEvent());
     })()`,
   );
 }

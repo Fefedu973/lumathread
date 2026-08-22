@@ -7,6 +7,8 @@ on:
     paths:
       - src/**
       - perf/final-renderer-provenance.md
+      - perf/scripts/benchmark-core.mjs
+      - perf/scripts/capture-cta-pointer-transitions.mjs
       - .github/workflows/final-pointer-transition-proof.yml
   workflow_dispatch:
 
@@ -49,19 +51,14 @@ jobs:
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
 
-      - name: Import the corrected transition capture driver
+      - name: Verify the deterministic transition capture driver
         run: |
-          readonly POINTER_PROOF_SHA="dc7e668ad0c1ae2712becaeb6b69c179894f480a"
-          git fetch --no-tags origin "$POINTER_PROOF_SHA"
-          git show \
-            "$POINTER_PROOF_SHA:perf/scripts/capture-cta-pointer-transitions.mjs" \
-            > perf/scripts/capture-final-cta-pointer-transitions.mjs
           grep -Fq 'SETTLING_FRAME_COUNT = 42' \
-            perf/scripts/capture-final-cta-pointer-transitions.mjs
+            perf/scripts/capture-cta-pointer-transitions.mjs
           grep -Fq 'RECOVERY_FRAME_COUNT = 12' \
-            perf/scripts/capture-final-cta-pointer-transitions.mjs
-          bunx biome format --write \
-            perf/scripts/capture-final-cta-pointer-transitions.mjs
+            perf/scripts/capture-cta-pointer-transitions.mjs
+          grep -Fq 'POINTER_START_TIME_MS = 1_000' \
+            perf/scripts/capture-cta-pointer-transitions.mjs
 
       - name: Check out frozen original renderer
         uses: actions/checkout@v4
@@ -116,7 +113,7 @@ jobs:
 
       - name: Capture enter, move, leave, settling and recovered states
         run: |
-          bun perf/scripts/capture-final-cta-pointer-transitions.mjs \
+          bun perf/scripts/capture-cta-pointer-transitions.mjs \
             --baseline http://127.0.0.1:4173 \
             --candidate http://127.0.0.1:4174 \
             --out pointer-results

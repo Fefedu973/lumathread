@@ -45,6 +45,8 @@ const surfaces = [
 
 const SETTLING_FRAME_COUNT = 42;
 const RECOVERY_FRAME_COUNT = 12;
+const POINTER_START_TIME_MS = 1_000;
+const POINTER_FRAME_TIME_MS = 1_000 / 60;
 const settlingCaptureFrames = new Set([0, 1, 3, 5, 11, 23, 35, 41]);
 const recoveryCaptureFrames = new Set([0, 3, 7, 11]);
 
@@ -113,7 +115,7 @@ async function captureBuild(chrome, baseUrl, side, surface) {
     );
 
     await resetCounters(page);
-    await dispatchPointer(page.client, "cta", 0.35);
+    await dispatchPointer(page.client, "cta", 0.35, POINTER_START_TIME_MS);
     const enterFrame = await stepFrame(page.client, 1 / 60);
     const enterCounters = await readCounters(page);
     await screenshot(
@@ -123,7 +125,12 @@ async function captureBuild(chrome, baseUrl, side, surface) {
 
     const moveFrames = [];
     for (let frame = 1; frame <= 4; frame += 1) {
-      await dispatchPointer(page.client, "cta", 0.35 + frame * 0.61);
+      await dispatchPointer(
+        page.client,
+        "cta",
+        0.35 + frame * 0.61,
+        POINTER_START_TIME_MS + frame * POINTER_FRAME_TIME_MS,
+      );
       moveFrames.push(await stepFrame(page.client, 1 / 60));
       if (frame === 1 || frame === 4) {
         await screenshot(
@@ -158,7 +165,10 @@ async function captureBuild(chrome, baseUrl, side, surface) {
       if (recoveryCaptureFrames.has(frame)) {
         await screenshot(
           page,
-          path.join(directory, `${surface.name}-pointer-recovered-f${frame}.png`),
+          path.join(
+            directory,
+            `${surface.name}-pointer-recovered-f${frame}.png`,
+          ),
         );
       }
     }
