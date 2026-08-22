@@ -39,12 +39,22 @@ jobs:
 
       - name: Materialize the previously validated stack
         run: |
-          bash perf/scripts/materialize-final-temporal-stack.sh
-          node perf/scripts/apply-final-validated-renderer.mjs
-          bunx biome format --write \
-            src \
-            perf/scripts/apply-final-validated-renderer.mjs \
-            perf/scripts/materialize-final-temporal-stack.sh
+          if grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
+              src/rendering/path-shaders.ts \
+            && test -f perf/final-renderer-provenance.md; then
+            echo "Final production source is already materialized."
+          else
+            bash perf/scripts/materialize-final-temporal-stack.sh
+            node perf/scripts/apply-final-validated-renderer.mjs
+            bunx biome format --write \
+              src \
+              perf/scripts/apply-final-validated-renderer.mjs \
+              perf/scripts/materialize-final-temporal-stack.sh
+          fi
 
       - name: Validate exact materialized source
         run: |
@@ -57,7 +67,7 @@ jobs:
           grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
             src/runtime/path-renderer.ts
           grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
-            src/rendering/shaders.ts
+            src/rendering/path-shaders.ts
 
       - name: Write source provenance
         run: |

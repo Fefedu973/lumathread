@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
+  actions: write
   contents: write
 
 jobs:
@@ -41,11 +41,15 @@ jobs:
               "wall": "Final uninstrumented wall and FPS proof",
               "pointer": "Final CTA pointer transition proof",
           }
+          current = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True
+          ).strip()
+          source_matches = {}
 
           def query_runs():
               raw = subprocess.check_output(
                   [
-                      "gh", "api",
+                      "gh", "api", "--method", "GET",
                       f"repos/{repository}/actions/runs",
                       "-f", f"branch={branch}",
                       "-f", "per_page=100",
@@ -54,17 +58,37 @@ jobs:
               )
               return json.loads(raw).get("workflow_runs", [])
 
+          def matches_current_source(run):
+              proof_sha = run.get("head_sha")
+              if not proof_sha:
+                  return False
+              if proof_sha not in source_matches:
+                  subprocess.run(
+                      ["git", "fetch", "origin", proof_sha],
+                      check=True,
+                      stdout=subprocess.DEVNULL,
+                  )
+                  source_matches[proof_sha] = subprocess.run(
+                      ["git", "diff", "--quiet", proof_sha, current, "--", "src"],
+                  ).returncode == 0
+              return source_matches[proof_sha]
+
           selected = {}
           for _ in range(50):
               runs = query_runs()
               for key, name in required.items():
                   matches = [
                       run for run in runs
-                      if run.get("name") == name and run.get("status") == "completed"
+                      if run.get("name") == name
+                      and run.get("status") == "completed"
+                      and run.get("conclusion") == "success"
                   ]
                   matches.sort(key=lambda run: run.get("created_at", ""), reverse=True)
-                  if matches:
-                      selected[key] = matches[0]
+                  selected.pop(key, None)
+                  for run in matches:
+                      if matches_current_source(run):
+                          selected[key] = run
+                          break
               if len(selected) == len(required):
                   break
               time.sleep(20)
@@ -74,17 +98,8 @@ jobs:
                   f"fail-closed: missing completed proof runs: {set(required) - set(selected)}"
               )
 
-          current = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           for key, run in selected.items():
               proof_sha = run["head_sha"]
-              subprocess.run(["git", "fetch", "origin", proof_sha], check=True)
-              changed = subprocess.run(
-                  ["git", "diff", "--quiet", proof_sha, current, "--", "src"],
-              ).returncode
-              if changed != 0:
-                  raise SystemExit(
-                      f"{key} proof {proof_sha} does not match current committed src tree {current}"
-                  )
               destination = Path("collected") / key
               destination.mkdir(parents=True, exist_ok=True)
               subprocess.run(
@@ -234,11 +249,14 @@ jobs:
       - name: Commit the single final report
         run: |
           git add perf/final-renderer-results.json perf/final-renderer-results.md
-          if git diff --cached --quiet; then
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "perf: publish final renderer proof"
+            git push origin HEAD:perf/final-validated-renderer
+          else
             echo "Final report is already current."
-            exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "perf: publish final renderer proof"
-          git push origin HEAD:perf/final-validated-renderer
+
+      - name: Publish the validated delivery PR
+        run: gh workflow run finalize-renderer-delivery.yml --ref perf/final-validated-renderer

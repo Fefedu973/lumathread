@@ -19,6 +19,7 @@ concurrency:
 jobs:
   benchmark:
     name: ${{ matrix.focus }} direct A/B
+    if: github.ref_name != 'perf/final-validated-renderer' && github.head_ref != 'perf/final-validated-renderer'
     runs-on: ubuntu-latest
     timeout-minutes: 105
     strategy:
@@ -256,7 +257,7 @@ jobs:
   aggregate:
     name: direct 2x target verdict
     needs: benchmark
-    if: always()
+    if: always() && github.ref_name != 'perf/final-validated-renderer' && github.head_ref != 'perf/final-validated-renderer'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

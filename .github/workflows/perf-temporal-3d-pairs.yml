@@ -18,6 +18,7 @@ concurrency:
 
 jobs:
   benchmark:
+    if: github.ref_name != 'perf/final-validated-renderer' && github.head_ref != 'perf/final-validated-renderer'
     runs-on: ubuntu-latest
     timeout-minutes: 100
 
