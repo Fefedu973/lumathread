@@ -26,7 +26,10 @@ if (!source.includes("const temporalSceneStability = new WeakMap")) {
 }
 
 source = await readFile(path, "utf8");
-if (!source.includes("const shouldUseTemporalPathCache =")) {
+if (
+  !source.includes("const temporalPathSettingsKey =") &&
+  !source.includes("const shouldUseTemporalPathCache =")
+) {
   await replaceOnce(
     path,
     `  const shouldUseTemporalHeroCache = (\n    root: Settings,\n    scene: readonly PreparedFilamentFrame[],\n  ) =>\n    scene.length === 1 &&\n    root.motionMode === "travel" &&\n    root.pathMode === "custom" &&\n    root.segmentLength >= 0.999 &&\n    root.quality.quadrature >= 2 &&\n    !root.propagation.enabled &&\n    !root.musicVisualizer.enabled &&\n    !root.filamentInteraction.enabled &&\n    !hasConditionalFollow(root) &&\n    root.speed > 0.000001 &&\n    root.filamentPlaybackRate > 0.000001;\n`,
@@ -53,12 +56,21 @@ if (!source.includes("const temporalAnchorRateHz =")) {
 }
 
 source = await readFile(path, "utf8");
+const selectorMarkers = source.includes("const temporalPathSettingsKey =")
+  ? [
+      "const temporalPathSettingsKey =",
+      "const temporalSettingsKey = temporalPathSettingsKey(",
+      "const temporalActive = temporalSettingsKey !== null;",
+    ]
+  : [
+      "const shouldUseTemporalPathCache =",
+      "shouldUseTemporalPathCache(resources, root, preparedSceneFrames)",
+    ];
 for (const marker of [
   "const temporalSceneStability = new WeakMap",
   "const anchoredSceneIsStable =",
-  "const shouldUseTemporalPathCache =",
   'root.motionMode === "anchored" ? 10 : 15',
-  "shouldUseTemporalPathCache(resources, root, preparedSceneFrames)",
+  ...selectorMarkers,
 ]) {
   if (!source.includes(marker)) {
     throw new Error(`Final renderer marker missing: ${marker}`);

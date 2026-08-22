@@ -41,7 +41,9 @@ jobs:
         run: |
           if grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
               src/runtime/path-renderer.ts \
-            && grep -Fq 'const temporalActive = shouldUseTemporalPathCache(' \
+            && grep -Fq 'const temporalSettingsKey = temporalPathSettingsKey(' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'const temporalActive = temporalSettingsKey !== null;' \
               src/runtime/path-renderer.ts \
             && grep -Fq 'ensureTemporalPathTargets(resources)' \
               src/runtime/path-renderer.ts \
@@ -68,7 +70,9 @@ jobs:
           git diff --check
           grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
             src/runtime/path-renderer.ts
-          grep -Fq 'const temporalActive = shouldUseTemporalPathCache(' \
+          grep -Fq 'const temporalSettingsKey = temporalPathSettingsKey(' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'const temporalActive = temporalSettingsKey !== null;' \
             src/runtime/path-renderer.ts
           grep -Fq 'ensureTemporalPathTargets(resources)' \
             src/runtime/path-renderer.ts
