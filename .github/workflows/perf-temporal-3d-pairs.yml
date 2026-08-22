@@ -95,11 +95,13 @@ jobs:
               raise SystemExit(
                   f'expected one return in temporal pair builder, found {block.count(needle)}'
               )
-          replacement = '''  result = result.replace(
-    "precision highp float;",
-    "precision highp float;\\nprecision highp sampler3D;",
-  );
-  return result;'''
+          replacement = "\n".join([
+              "  result = result.replace(",
+              '    "precision highp float;",',
+              '    "precision highp float;\\nprecision highp sampler3D;",',
+              "  );",
+              "  return result;",
+          ])
           block = block.replace(needle, replacement)
           path.write_text(source[:start] + block + source[end:], encoding='utf-8')
           PY

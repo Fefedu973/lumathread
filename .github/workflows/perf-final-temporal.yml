@@ -94,24 +94,32 @@ jobs:
 
           path = Path("baseline/src/runtime/use-hero-wave-renderer.ts")
           source = path.read_text(encoding="utf-8")
-          request_before = '''      if (
-        !running ||
-        frameScheduled ||
-        document.visibilityState === "hidden" ||'''
-          request_after = '''      if (
-        !running ||
-        frameScheduled ||
-        settings.paused ||
-        manualPausedRef.current ||
-        document.visibilityState === "hidden" ||'''
-          step_before = '''      step: (seconds: number) => {
-        const safeSeconds = finite(seconds, 0);'''
-          step_after = '''      step: (seconds: number) => {
-        if (frameScheduled) {
-          cancelAnimationFrame(raf);
-          frameScheduled = false;
-        }
-        const safeSeconds = finite(seconds, 0);'''
+          request_before = "\n".join([
+              "      if (",
+              "        !running ||",
+              "        frameScheduled ||",
+              '        document.visibilityState === "hidden" ||',
+          ])
+          request_after = "\n".join([
+              "      if (",
+              "        !running ||",
+              "        frameScheduled ||",
+              "        settings.paused ||",
+              "        manualPausedRef.current ||",
+              '        document.visibilityState === "hidden" ||',
+          ])
+          step_before = "\n".join([
+              "      step: (seconds: number) => {",
+              "        const safeSeconds = finite(seconds, 0);",
+          ])
+          step_after = "\n".join([
+              "      step: (seconds: number) => {",
+              "        if (frameScheduled) {",
+              "          cancelAnimationFrame(raf);",
+              "          frameScheduled = false;",
+              "        }",
+              "        const safeSeconds = finite(seconds, 0);",
+          ])
           if source.count(request_before) != 1:
               raise SystemExit("original requestFrame selector was not uniquely found")
           source = source.replace(request_before, request_after)
