@@ -74,6 +74,12 @@ jobs:
           cd baseline
           bun install --frozen-lockfile
           cd ..
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
           mkdir -p baseline/perf
           rm -rf baseline/perf/harness
           cp -R perf/harness baseline/perf/harness
