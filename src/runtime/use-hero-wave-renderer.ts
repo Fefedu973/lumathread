@@ -502,7 +502,6 @@ export function useHeroWaveRenderer({
         settings.fadeInDuration,
         ...settings.fadeInEasingPoints,
         settings.fadeInAffectsGlassText ? 1 : 0,
-        glassCanRender(settings) ? 1 : 0,
       ].join("\u001f");
 
     const restartSceneFade = (settings: Settings) => {
