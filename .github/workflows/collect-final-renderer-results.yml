@@ -121,6 +121,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import re
           import subprocess
           from pathlib import Path
 
@@ -207,9 +208,11 @@ jobs:
                   "visual": str(visual_candidates[0]),
               },
           }
-          Path("perf/final-renderer-results.json").write_text(
-              json.dumps(result, indent=2) + "\n"
-          )
+          report_json = json.dumps(result, indent=2) + "\n"
+          # Match Biome's canonical JSON exponent spelling (for example e-5,
+          # not Python's e-05) so the generated report passes `bun run check`.
+          report_json = re.sub(r"e([+-])0+(\d+)", r"e\1\2", report_json)
+          Path("perf/final-renderer-results.json").write_text(report_json)
 
           overall = direct["overall"]
           hero = direct["hero"]
