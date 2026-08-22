@@ -5,7 +5,11 @@ import {
   createResourceManager,
   type HeroWaveResourceState,
 } from "../runtime/resource-manager";
-import { selectTemporalPathCacheAction } from "../runtime/path-renderer";
+import {
+  isTemporalPathBootstrapAligned,
+  selectTemporalPathAnchorIndex,
+  selectTemporalPathCacheAction,
+} from "../runtime/path-renderer";
 
 function createFakeWebGl2(failTextureAt = Number.POSITIVE_INFINITY) {
   const calls = {
@@ -136,6 +140,25 @@ describe("HDR path target lifecycle", () => {
     expect(selectTemporalPathCacheAction(10, 10, true, true)).toBe(
       "render-primary",
     );
+  });
+
+  test("starts a rebuilt temporal bank only near a visual-time anchor", () => {
+    expect(isTemporalPathBootstrapAligned(0.35, 0.1)).toBeFalse();
+    expect(isTemporalPathBootstrapAligned(0.4, 0.1)).toBeTrue();
+    expect(isTemporalPathBootstrapAligned(0.408, 0.1)).toBeTrue();
+    expect(isTemporalPathBootstrapAligned(0.409, 0.1)).toBeFalse();
+    expect(isTemporalPathBootstrapAligned(0.395, 0.1)).toBeTrue();
+    expect(isTemporalPathBootstrapAligned(Number.NaN, 0.1)).toBeFalse();
+    expect(isTemporalPathBootstrapAligned(0.4, 0)).toBeFalse();
+  });
+
+  test("snaps only rebuilt anchored caches to the nearest anchor", () => {
+    expect(selectTemporalPathAnchorIndex(0.395, 0.1, true, "anchored")).toBe(4);
+    expect(selectTemporalPathAnchorIndex(0.395, 0.1, false, "anchored")).toBe(
+      3,
+    );
+    expect(selectTemporalPathAnchorIndex(0.395, 0.1, true, "travel")).toBe(3);
+    expect(selectTemporalPathAnchorIndex(0.35, 0.1, true, "anchored")).toBe(3);
   });
 
   test("allocates the temporal render-target bank only when requested", () => {

@@ -60,6 +60,39 @@ export function selectTemporalPathCacheAction(
     : ("render-primary" as const);
 }
 
+export function isTemporalPathBootstrapAligned(
+  currentTime: number,
+  visualStep: number,
+) {
+  if (
+    !Number.isFinite(currentTime) ||
+    !Number.isFinite(visualStep) ||
+    visualStep <= 0
+  ) {
+    return false;
+  }
+  const nearestAnchor = Math.round(currentTime / visualStep) * visualStep;
+  const floatingPointSlack =
+    Number.EPSILON * Math.max(1, Math.abs(currentTime), visualStep) * 8;
+  return (
+    Math.abs(currentTime - nearestAnchor) <=
+    visualStep / 12 + floatingPointSlack
+  );
+}
+
+export function selectTemporalPathAnchorIndex(
+  currentTime: number,
+  visualStep: number,
+  settingsChanged: boolean,
+  motionMode: Settings["motionMode"],
+) {
+  return settingsChanged &&
+    motionMode === "anchored" &&
+    isTemporalPathBootstrapAligned(currentTime, visualStep)
+    ? Math.round(currentTime / visualStep)
+    : Math.floor(currentTime / visualStep);
+}
+
 export function createPathRenderer(
   {
     gl,
@@ -787,14 +820,14 @@ export function createPathRenderer(
     return previous.stableFrames >= 2;
   };
 
-  const shouldUseTemporalPathCache = (
+  const temporalPathSettingsKey = (
     resources: PathResources,
     root: Settings,
     scene: readonly PreparedFilamentFrame[],
   ) => {
     if (!isInitialFramePresented()) {
       temporalSceneStability.delete(resources);
-      return false;
+      return null;
     }
     const common =
       scene.length === 1 &&
@@ -808,18 +841,33 @@ export function createPathRenderer(
       root.filamentPlaybackRate > 0.000001;
     if (!common) {
       temporalSceneStability.delete(resources);
-      return false;
+      return null;
     }
     if (root.motionMode === "travel") {
       temporalSceneStability.delete(resources);
-      return !hasConditionalFollow(root);
+      return hasConditionalFollow(root)
+        ? null
+        : temporalHeroSettingsKey(resources, root, scene);
     }
-    return (
+    const stable =
       root.motionMode === "anchored" &&
       root.quality.quadrature >= 4 &&
       root.headTaper <= 0.001001 &&
-      anchoredSceneIsStable(resources, scene)
+      anchoredSceneIsStable(resources, scene);
+    if (!stable) return null;
+    const settingsKey = temporalHeroSettingsKey(resources, root, scene);
+    if (!temporalHeroCacheIdentityChanged(resources, scene, settingsKey)) {
+      return settingsKey;
+    }
+    const currentTime = scene[0]?.visualTime;
+    if (currentTime === undefined) return null;
+    const visualStep = Math.max(
+      Math.abs(root.speed * root.filamentPlaybackRate) / 10,
+      1 / 240,
     );
+    return isTemporalPathBootstrapAligned(currentTime, visualStep)
+      ? settingsKey
+      : null;
   };
 
   const swapTemporalPathBanks = (resources: PathResources) => {
@@ -899,10 +947,25 @@ export function createPathRenderer(
     ].join("|");
   };
 
+  const temporalHeroCacheIdentityChanged = (
+    resources: PathResources,
+    scene: readonly PreparedFilamentFrame[],
+    settingsKey: string,
+  ) => {
+    const entry = scene[0];
+    return (
+      resources.temporalSettingsKey !== settingsKey ||
+      resources.temporalPaletteTexture !== (entry?.style.palette ?? null) ||
+      resources.temporalProfilesTexture !== (entry?.style.profiles ?? null) ||
+      resources.temporalSizeRevision !== resourceState.sizeRevision
+    );
+  };
+
   const updateTemporalHeroCache = (
     resources: PathResources,
     root: Settings,
     scene: readonly PreparedFilamentFrame[],
+    settingsKey: string,
   ) => {
     const temporalTargets = resources.temporalTargets;
     if (!temporalTargets) {
@@ -914,14 +977,18 @@ export function createPathRenderer(
       Math.abs(root.speed * root.filamentPlaybackRate) / temporalAnchorRateHz,
       1 / 240,
     );
-    const anchorIndex = Math.floor(currentTime / visualStep);
     const entry = scene[0];
-    const settingsKey = temporalHeroSettingsKey(resources, root, scene);
-    const settingsChanged =
-      resources.temporalSettingsKey !== settingsKey ||
-      resources.temporalPaletteTexture !== (entry?.style.palette ?? null) ||
-      resources.temporalProfilesTexture !== (entry?.style.profiles ?? null) ||
-      resources.temporalSizeRevision !== resourceState.sizeRevision;
+    const settingsChanged = temporalHeroCacheIdentityChanged(
+      resources,
+      scene,
+      settingsKey,
+    );
+    const anchorIndex = selectTemporalPathAnchorIndex(
+      currentTime,
+      visualStep,
+      settingsChanged,
+      root.motionMode,
+    );
 
     const commitCacheIdentity = () => {
       resources.temporalAnchorIndex = anchorIndex;
@@ -1046,11 +1113,12 @@ export function createPathRenderer(
       );
     }
     uploadSceneGeometry(resources, preparedSceneFrames);
-    const temporalActive = shouldUseTemporalPathCache(
+    const temporalSettingsKey = temporalPathSettingsKey(
       resources,
       root,
       preparedSceneFrames,
     );
+    const temporalActive = temporalSettingsKey !== null;
     try {
       if (temporalActive) {
         ensureTemporalPathTargets(resources);
@@ -1070,6 +1138,7 @@ export function createPathRenderer(
         resources,
         root,
         preparedSceneFrames,
+        temporalSettingsKey,
       );
       compositePath(resources, root, temporalCache.mix, temporalCache.ready);
       return;
