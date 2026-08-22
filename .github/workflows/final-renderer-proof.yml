@@ -12,6 +12,7 @@ on:
       - perf/scripts/add-temporal-parity-snapshots.mjs
       - perf/scripts/benchmark-core.mjs
       - perf/scripts/benchmark-suite.mjs
+      - perf/scripts/benchmark-suite.test.mjs
       - perf/scripts/evaluate-final-renderer-benchmark.py
       - .github/workflows/final-renderer-proof.yml
   workflow_dispatch:

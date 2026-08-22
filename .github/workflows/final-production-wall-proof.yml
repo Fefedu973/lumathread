@@ -7,6 +7,9 @@ on:
     paths:
       - src/**
       - perf/final-renderer-provenance.md
+      - perf/scripts/benchmark-core.mjs
+      - perf/scripts/benchmark-suite.mjs
+      - perf/scripts/benchmark-suite.test.mjs
       - .github/workflows/final-production-wall-proof.yml
   workflow_dispatch:
 
@@ -62,6 +65,7 @@ jobs:
         run: |
           bun install --frozen-lockfile
           bun run check
+          bun test perf/scripts/benchmark-suite.test.mjs
           bun run build
           bunx tsc -p tsconfig.perf.json --noEmit
 

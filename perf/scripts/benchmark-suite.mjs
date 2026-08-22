@@ -58,7 +58,11 @@ function gpuTotalFrameMeanMs(profile) {
   return stageTotalMs > 0 ? stageTotalMs / profile.frameCount : null;
 }
 
-async function drainGpuProfiler(page, expectedFrameCount) {
+async function drainGpuProfiler(
+  page,
+  expectedFrameCount,
+  requireGpuProfiler = true,
+) {
   let profile = null;
   for (let attempt = 1; attempt <= GPU_QUERY_DRAIN_ATTEMPTS; attempt += 1) {
     profile = await evaluate(
@@ -93,6 +97,7 @@ async function drainGpuProfiler(page, expectedFrameCount) {
       throw new Error("GPU profiler is unavailable.");
     }
     if (!profile.supported) {
+      if (!requireGpuProfiler) return profile;
       throw new Error("GPU timer-query extension is unavailable.");
     }
     if (profile.errors?.length) {
@@ -188,7 +193,7 @@ async function runSingleBenchmark(
     const metricsAfter = metricsToObject(
       await page.client.call("Performance.getMetrics"),
     );
-    await drainGpuProfiler(page, frameCount);
+    await drainGpuProfiler(page, frameCount, scenario.instrument !== "none");
     const payload = await collectPayload(page);
     return summarizeRun(payload, metricsBefore, metricsAfter, stepSamples);
   } finally {
@@ -260,7 +265,11 @@ async function runPairedBenchmark(
       );
     }
     for (const build of initialOrder) {
-      await drainGpuProfiler(pages[build], frameCount);
+      await drainGpuProfiler(
+        pages[build],
+        frameCount,
+        scenario.instrument !== "none",
+      );
       payloads[build] = await collectPayload(pages[build]);
     }
 
@@ -593,6 +602,7 @@ function markdownSummary(results) {
 }
 
 export {
+  drainGpuProfiler,
   runSingleBenchmark,
   runPairedBenchmark,
   aggregateRuns,
