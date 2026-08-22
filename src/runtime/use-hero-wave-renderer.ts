@@ -462,6 +462,7 @@ export function useHeroWaveRenderer({
 
     let raf = 0;
     let revealRaf = 0;
+    let presentedRaf = 0;
     let revealTimer = 0;
     let frameScheduled = false;
     let running = true;
@@ -472,6 +473,7 @@ export function useHeroWaveRenderer({
     let inViewport = true;
     let reducedMotion = false;
     let readyReported = false;
+    let initialFramePresented = false;
     let renderedFrameIndex = 0;
     let sceneFadeProgress = 1;
     let sceneFadeStartedAt: number | null = null;
@@ -579,6 +581,8 @@ export function useHeroWaveRenderer({
       if (
         !running ||
         frameScheduled ||
+        settings.paused ||
+        manualPausedRef.current ||
         document.visibilityState === "hidden" ||
         (settings.pauseWhenOffscreen && !inViewport)
       ) {
@@ -805,6 +809,7 @@ export function useHeroWaveRenderer({
       pointerState,
       getClockTime: () => clockTime,
       getSceneFadeProgress: () => sceneFadeProgress,
+      isInitialFramePresented: () => initialFramePresented,
       isRunning: () => running,
       requestFrame,
       activateProgram,
@@ -1089,14 +1094,20 @@ export function useHeroWaveRenderer({
 
     draw(1 / 60);
     const reveal = () => {
-      if (!readyReported) restartSceneFade(settingsRef.current);
       canvas.dataset.ready = "true";
       canvas.style.opacity = "1";
-      requestFrame();
       if (!readyReported) {
+        restartSceneFade(settingsRef.current);
         readyReported = true;
+        presentedRaf = requestAnimationFrame(() => {
+          presentedRaf = requestAnimationFrame(() => {
+            initialFramePresented = true;
+            requestFrame();
+          });
+        });
         callbacksRef.current.onReady?.();
       }
+      requestFrame();
     };
     revealRaf = requestAnimationFrame(() => {
       revealRaf = requestAnimationFrame(reveal);
@@ -1111,6 +1122,10 @@ export function useHeroWaveRenderer({
     ).__waveDebug = {
       time: () => clockTime,
       step: (seconds: number) => {
+        if (frameScheduled) {
+          cancelAnimationFrame(raf);
+          frameScheduled = false;
+        }
         const safeSeconds = finite(seconds, 0);
         clockTime += safeSeconds;
         currentTimeRef.current = clockTime;
@@ -1123,6 +1138,7 @@ export function useHeroWaveRenderer({
       invalidateRef.current = () => undefined;
       if (frameScheduled) cancelAnimationFrame(raf);
       cancelAnimationFrame(revealRaf);
+      cancelAnimationFrame(presentedRaf);
       window.clearTimeout(revealTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       canvas.removeEventListener("webglcontextlost", onContextLost);

@@ -1,8 +1,6 @@
 import {
   HERO_GLOW_PROFILE_MAX_DISTANCE,
   HERO_PALETTE_TEXTURE_WIDTH,
-  HERO_PATH_K0_MAX_ARGUMENT,
-  HERO_PATH_K0_MIN_ARGUMENT,
 } from "./constants";
 
 /** WebGL shader sources. Kept byte-for-byte equivalent to the extracted renderer. */
@@ -519,6 +517,213 @@ void main() {
 }
 `;
 
+function replaceRequiredShaderBlock(
+  source: string,
+  before: string,
+  after: string,
+  label: string,
+) {
+  const first = source.indexOf(before);
+  if (first < 0 || source.indexOf(before, first + before.length) >= 0) {
+    throw new Error(`Unable to specialize glass shader block: ${label}.`);
+  }
+  return source.slice(0, first) + after + source.slice(first + before.length);
+}
+
+const GLASS_FIXED_DOME_BEFORE_0 = `  float left = texture2D(uTextMask, uv - vec2(pixel.x, 0.0) * (1.0 + uBevel)).r;
+  float right = texture2D(uTextMask, uv + vec2(pixel.x, 0.0) * (1.0 + uBevel)).r;
+  float down = texture2D(uTextMask, uv - vec2(0.0, pixel.y) * (1.0 + uBevel)).r;
+  float up = texture2D(uTextMask, uv + vec2(0.0, pixel.y) * (1.0 + uBevel)).r;
+  vec2 gradient = vec2(right - left, up - down);
+  float simpleEdge = clamp(length(gradient) * 2.8, 0.0, 1.0);
+  vec2 simpleNormal = gradient / max(length(gradient), 0.0001);
+
+  float inside = max(signedDistance, 0.0);
+  float depthRadius = max(uSurfaceDepth, 1.0);
+  vec2 sdfPixel = 2.0 / max(uRes, vec2(1.0));
+  float dR = max(readSignedDistance(uv + vec2(sdfPixel.x, 0.0)), 0.0);
+  float dL = max(readSignedDistance(uv - vec2(sdfPixel.x, 0.0)), 0.0);
+  float dU = max(readSignedDistance(uv + vec2(0.0, sdfPixel.y)), 0.0);
+  float dD = max(readSignedDistance(uv - vec2(0.0, sdfPixel.y)), 0.0);
+  float hC = surfaceHeight(inside, depthRadius);
+  vec2 heightGradient = vec2(
+    surfaceHeight(dR, depthRadius) - surfaceHeight(dL, depthRadius),
+    surfaceHeight(dU, depthRadius) - surfaceHeight(dD, depthRadius)
+  ) * 0.25;
+  vec2 boundedHeightGradient = heightGradient / (vec2(1.0) + abs(heightGradient));
+  vec3 volumeNormal = normalize(vec3(-heightGradient * (0.7 + uBevel * 0.18), 1.0));
+  float volumeEdge = 1.0 - smoothstep(0.0, depthRadius * 0.9, inside);
+  float useVolume = step(0.5, uSurfaceModel);
+  float edge = mix(simpleEdge, volumeEdge, useVolume);
+  vec2 normal = mix(simpleNormal, -volumeNormal.xy, useVolume);
+  vec3 surfaceNormal = normalize(mix(
+    vec3(simpleNormal * (0.35 + uBevel), 1.0),
+    volumeNormal,
+    useVolume
+  ));`;
+const GLASS_FIXED_DOME_AFTER_0 = `  float inside = max(signedDistance, 0.0);
+  float depthRadius = max(uSurfaceDepth, 1.0);
+  vec2 sdfPixel = 2.0 / max(uRes, vec2(1.0));
+  float dR = max(readSignedDistance(uv + vec2(sdfPixel.x, 0.0)), 0.0);
+  float dL = max(readSignedDistance(uv - vec2(sdfPixel.x, 0.0)), 0.0);
+  float dU = max(readSignedDistance(uv + vec2(0.0, sdfPixel.y)), 0.0);
+  float dD = max(readSignedDistance(uv - vec2(0.0, sdfPixel.y)), 0.0);
+  float hC = surfaceHeight(inside, depthRadius);
+  vec2 heightGradient = vec2(
+    surfaceHeight(dR, depthRadius) - surfaceHeight(dL, depthRadius),
+    surfaceHeight(dU, depthRadius) - surfaceHeight(dD, depthRadius)
+  ) * 0.25;
+  vec3 volumeNormal = normalize(vec3(-heightGradient * 0.7, 1.0));
+  float edge = 1.0 - smoothstep(0.0, depthRadius * 0.9, inside);
+  vec2 normal = -volumeNormal.xy;
+  vec3 surfaceNormal = normalize(volumeNormal);`;
+
+const GLASS_FIXED_DOME_BEFORE_1 = `  float angle = radians(uRibAngle);
+  vec2 ribDirection = vec2(cos(angle), sin(angle));
+  float ribPhase = dot(gl_FragCoord.xy, ribDirection) / max(uRibWidth, 1.0);
+  float rib = sin(ribPhase * 6.28318530718) * uRibStrength;
+  vec2 ribNormal = vec2(-ribDirection.y, ribDirection.x) * rib;
+  float liquidPhase = uTime * uLiquidSpeed * 6.28318530718;
+  vec2 liquid = vec2(
+    sin((uv.y * 1.37 + uv.x * 0.31) * uLiquidScale * 6.28318530718 + liquidPhase),
+    cos((uv.x * 1.21 - uv.y * 0.28) * uLiquidScale * 6.28318530718 - liquidPhase * 0.83)
+  ) * uLiquidStrength;
+  float refractivePower = 1.0 - 1.0 / max(uIor, 1.01);
+  float thickness = clamp(hC / depthRadius, 0.0, 1.0);
+  vec2 biconvexRefraction = boundedHeightGradient * uRefraction
+    * refractivePower * (1.65 + thickness * 0.85);
+  vec2 sdfGradient = normalize(vec2(dR - dL, dU - dD) + vec2(0.0001));
+  vec2 domeRefraction = -sdfGradient * uRefraction * thickness * 0.62;
+  vec2 volumeRefraction = mix(
+    biconvexRefraction,
+    domeRefraction,
+    step(0.5, uBevelMode)
+  );
+  vec2 simpleRefraction = normal * edge * uRefraction;
+  vec2 micro = (vec2(
+    hash21(gl_FragCoord.xy * 0.083),
+    hash21(gl_FragCoord.yx * 0.071 + vec2(31.7, 9.2))
+  ) - 0.5) * uMicroDistortion * 8.0;
+  float edgeWrapWidth = max(
+    3.0,
+    min(uSdfRange * 0.9, depthRadius * 0.85)
+  );
+  float edgeWrapEnvelope = 1.0 - smoothstep(0.0, edgeWrapWidth, inside);
+  vec2 edgeWrapPx = -normal * uEdgeWrap
+    * edgeWrapEnvelope * edgeWrapEnvelope;
+  vec2 distortionPx = mix(simpleRefraction, volumeRefraction, useVolume)
+    + (ribNormal + liquid) * uRefraction
+    + edgeWrapPx
+    + micro;
+  float lensTransition = max(
+    2.0,
+    min(depthRadius * 0.35, uSdfRange * 0.4)
+  );
+  float lensDepth = smoothstep(0.0, lensTransition, inside) * useVolume;
+  vec2 lensContraction = vec2(1.0) - vec2(1.0) /
+    (vec2(1.0) + max(uMagnification, vec2(0.0)));
+  vec2 magnificationUv = -(uv - vec2(0.5)) * lensContraction * lensDepth;
+  vec2 displacementUv = vec2(uDisplacement.x, -uDisplacement.y) * pixel;
+  vec2 sampleUv = clamp(
+    uv + distortionPx * pixel + magnificationUv + displacementUv,
+    pixel,
+    vec2(1.0) - pixel
+  );`;
+const GLASS_FIXED_DOME_AFTER_1 = `  float thickness = clamp(hC / depthRadius, 0.0, 1.0);
+  vec2 sdfGradient = normalize(vec2(dR - dL, dU - dD) + vec2(0.0001));
+  vec2 distortionPx = -sdfGradient * uRefraction * thickness * 0.62;
+  vec2 sampleUv = clamp(
+    uv + distortionPx * pixel,
+    pixel,
+    vec2(1.0) - pixel
+  );`;
+
+const GLASS_FIXED_DOME_BEFORE_2 = `  float blurRadius = 1.0 + uBlur * 12.0 + uFrost * (2.0 + uRoughness * 9.0) + jitter;`;
+const GLASS_FIXED_DOME_AFTER_2 = `  float blurRadius = 1.0 + uBlur * 12.0 + uFrost * 2.0 + jitter;`;
+
+const GLASS_FIXED_DOME_BEFORE_3 = `  float blurMix = clamp(uBlur + uFrost * (0.42 + uRoughness * 0.38), 0.0, 1.0)
+    * (1.0 - edge * 0.55);`;
+const GLASS_FIXED_DOME_AFTER_3 = `  float blurMix = clamp(uBlur + uFrost * 0.42, 0.0, 1.0)
+    * (1.0 - edge * 0.55);`;
+
+const GLASS_FIXED_DOME_BEFORE_4 = `      + uFrost * (0.22 + uRoughness * 0.36),`;
+const GLASS_FIXED_DOME_AFTER_4 = `      + uFrost * 0.22,`;
+
+export const GLASS_TEXT_FIXED_DOME_FRAGMENT_SHADER = replaceRequiredShaderBlock(
+  replaceRequiredShaderBlock(
+    replaceRequiredShaderBlock(
+      replaceRequiredShaderBlock(
+        replaceRequiredShaderBlock(
+          GLASS_TEXT_FRAGMENT_SHADER,
+          GLASS_FIXED_DOME_BEFORE_0,
+          GLASS_FIXED_DOME_AFTER_0,
+          "fixed-dome-0",
+        ),
+        GLASS_FIXED_DOME_BEFORE_1,
+        GLASS_FIXED_DOME_AFTER_1,
+        "fixed-dome-1",
+      ),
+      GLASS_FIXED_DOME_BEFORE_2,
+      GLASS_FIXED_DOME_AFTER_2,
+      "fixed-dome-2",
+    ),
+    GLASS_FIXED_DOME_BEFORE_3,
+    GLASS_FIXED_DOME_AFTER_3,
+    "fixed-dome-3",
+  ),
+  GLASS_FIXED_DOME_BEFORE_4,
+  GLASS_FIXED_DOME_AFTER_4,
+  "fixed-dome-4",
+);
+
+const GLASS_SATURATED_DIFFUSION_BEFORE = `  vec2 chroma = normal * (0.3 + edge * 0.7) * uChromaticAberration * pixel;
+  vec3 sharp = dispersedSample(sampleUv, chroma, pixel);
+
+  float jitter = (hash21(gl_FragCoord.xy + floor(uTime * 17.0)) - 0.5) * 2.0;
+  float blurRadius = 1.0 + uBlur * 12.0 + uFrost * 2.0 + jitter;
+  vec2 blurOffset = pixel * max(blurRadius, 0.5);
+  vec3 blurred = sharp * 0.2;
+  blurred += dispersedSample(sampleUv + vec2(blurOffset.x, 0.0), chroma, pixel) * 0.12;
+  blurred += dispersedSample(sampleUv - vec2(blurOffset.x, 0.0), chroma, pixel) * 0.12;
+  blurred += dispersedSample(sampleUv + vec2(0.0, blurOffset.y), chroma, pixel) * 0.12;
+  blurred += dispersedSample(sampleUv - vec2(0.0, blurOffset.y), chroma, pixel) * 0.12;
+  blurred += dispersedSample(sampleUv + blurOffset * 0.7, chroma, pixel) * 0.08;
+  blurred += dispersedSample(sampleUv - blurOffset * 0.7, chroma, pixel) * 0.08;
+  blurred += dispersedSample(sampleUv + vec2(blurOffset.x, -blurOffset.y) * 0.7, chroma, pixel) * 0.08;
+  blurred += dispersedSample(sampleUv + vec2(-blurOffset.x, blurOffset.y) * 0.7, chroma, pixel) * 0.08;
+  float blurMix = clamp(uBlur + uFrost * 0.42, 0.0, 1.0)
+    * (1.0 - edge * 0.55);
+  vec3 refracted = mix(sharp, blurred, blurMix);
+  vec3 diffused = texture2D(uBlurScene, sampleUv).rgb;
+  float diffusionMix = clamp(
+    uDiffusion * (0.58 + 0.42 * thickness)
+      + uBlur * 0.34
+      + uFrost * 0.22,
+    0.0,
+    1.0
+  );
+  float diffusedLuminance = dot(diffused, vec3(0.299, 0.587, 0.114));
+  vec3 diffusionBloom = diffused
+    * smoothstep(0.025, 0.55, diffusedLuminance)
+    * uDiffusion * 0.48;
+  refracted = mix(refracted, diffused, diffusionMix) + diffusionBloom;
+`;
+const GLASS_SATURATED_DIFFUSION_AFTER = `  vec3 diffused = texture2D(uBlurScene, sampleUv).rgb;
+  float diffusedLuminance = dot(diffused, vec3(0.299, 0.587, 0.114));
+  vec3 diffusionBloom = diffused
+    * smoothstep(0.025, 0.55, diffusedLuminance)
+    * uDiffusion * 0.48;
+  vec3 refracted = diffused + diffusionBloom;
+`;
+
+export const GLASS_TEXT_FIXED_DOME_SATURATED_FRAGMENT_SHADER =
+  replaceRequiredShaderBlock(
+    GLASS_TEXT_FIXED_DOME_FRAGMENT_SHADER,
+    GLASS_SATURATED_DIFFUSION_BEFORE,
+    GLASS_SATURATED_DIFFUSION_AFTER,
+    "saturated-diffusion",
+  );
+
 export const COMMON_SEGMENT_GLSL = `
 uniform float uTime;
 uniform float uCurveTravel;
@@ -766,7 +971,11 @@ vec3 lightThemeTintColor(vec3 sourceColor) {
   }
 
   vec3 chroma = positive / peak;
-  float chromaLuminance = clamp(dot(chroma, LUMA), 0.0, 1.0);
+  float chromaLuminance = clamp(
+    dot(chroma, vec3(0.2126, 0.7152, 0.0722)),
+    0.0,
+    1.0
+  );
   // Bright cyan and green disappear against the light canvas when they are
   // pushed toward white. Preserve their hue while capping luminance so the
   // filament and its reflected dots retain contrast in the light theme.
@@ -992,637 +1201,5 @@ void main() {
   color = mix(color, dots.rgb, dots.a);
   color += displayNoise(fragmentCoordinate) * (1.0 - lightTheme);
   gl_FragColor = vec4(color, 1.0);
-}
-`;
-
-export const FULLSCREEN_VERTEX_SHADER_300 = `#version 300 es
-in vec2 aPos;
-void main() {
-  gl_Position = vec4(aPos, 0.0, 1.0);
-}
-`;
-
-export const PATH_INTEGRAL_VERTEX_SHADER = `#version 300 es
-precision highp float;
-
-in vec2 aCorner;
-in vec2 aSegmentStart;
-in vec2 aSegmentEnd;
-in vec2 aProgressRange;
-in vec2 aEndpointWeights;
-
-uniform vec2 uTargetResolution;
-uniform float uSupportRadiusPositivePx;
-uniform float uSupportRadiusNegativePx;
-
-flat out vec2 vSegmentStart;
-flat out vec2 vSegmentEnd;
-flat out vec2 vProgressRange;
-flat out vec2 vEndpointWeights;
-
-void main() {
-  vec2 startPx = aSegmentStart * uTargetResolution;
-  vec2 endPx = aSegmentEnd * uTargetResolution;
-  vec2 direction = endPx - startPx;
-  float directionLength = max(length(direction), 0.0001);
-  vec2 tangent = direction / directionLength;
-  vec2 normal = vec2(-tangent.y, tangent.x);
-  float positiveRadius = max(uSupportRadiusPositivePx, 1.0);
-  float negativeRadius = max(uSupportRadiusNegativePx, 1.0);
-  float alongRadius = max(positiveRadius, negativeRadius);
-  float acrossRadius = aCorner.y > 0.0
-    ? positiveRadius
-    : negativeRadius;
-  vec2 base = aCorner.x < 0.0 ? startPx : endPx;
-  vec2 positionPx = base
-    + tangent * aCorner.x * alongRadius
-    + normal * aCorner.y * acrossRadius;
-
-  gl_Position = vec4(
-    positionPx / uTargetResolution * 2.0 - 1.0,
-    0.0,
-    1.0
-  );
-  vSegmentStart = aSegmentStart;
-  vSegmentEnd = aSegmentEnd;
-  vProgressRange = aProgressRange;
-  vEndpointWeights = aEndpointWeights;
-}
-`;
-
-export const PATH_INTEGRAL_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-flat in vec2 vSegmentStart;
-flat in vec2 vSegmentEnd;
-flat in vec2 vProgressRange;
-flat in vec2 vEndpointWeights;
-
-layout(location = 0) out vec4 outWave;
-layout(location = 1) out vec4 outReflection;
-
-uniform vec2 uTargetResolution;
-uniform vec2 uCanvasResolution;
-uniform sampler2D uPalette;
-uniform sampler2D uK0Lut;
-uniform sampler2D uProfiles;
-uniform mat3 uHueMatrix;
-uniform vec4 uLayerMask0;
-uniform vec2 uLayerMask1;
-uniform float uQuadraturePoints;
-uniform float uTime;
-uniform float uCurveTravel;
-uniform float uEnvelopeStationary;
-uniform float uStationaryCenter;
-uniform float uSegmentLength;
-uniform float uTailTaper;
-uniform float uHeadTaper;
-uniform float uPathClosed;
-uniform float uClosedLoopTaper;
-uniform float uBrightness;
-uniform float uBandSpread;
-uniform float uUpperGlowSpread;
-uniform float uLowerGlowSpread;
-uniform float uGlowAsymmetry;
-uniform float uPaletteOffset;
-uniform float uPaletteWrap;
-uniform vec4 uMaterialWeights0;
-uniform vec4 uMaterialWeights1;
-uniform float uVelocityWidthScale;
-uniform float uVelocityGlowScale;
-uniform float uVelocityReflectionScale;
-uniform float uVisibility;
-
-const float PI = 3.14159265358979323846;
-const float PALETTE_TEXEL = ${(1 / HERO_PALETTE_TEXTURE_WIDTH).toFixed(10)};
-const float K0_MAX_ARGUMENT = ${HERO_PATH_K0_MAX_ARGUMENT.toFixed(8)};
-const float K0_MIN_ARGUMENT = ${HERO_PATH_K0_MIN_ARGUMENT.toFixed(8)};
-const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-
-float segmentCenter(float time) {
-  float lengthValue = max(uSegmentLength, 0.05);
-  float outsidePadding = 0.06;
-  float firstCenter = -0.5 * lengthValue - outsidePadding;
-  float cycleLength = 1.0 + lengthValue + 2.0 * outsidePadding;
-  float centeredOffset = 0.5 - firstCenter;
-  float travelingCenter = firstCenter + mod(
-    time * uCurveTravel + centeredOffset,
-    cycleLength
-  );
-  return mix(
-    travelingCenter,
-    uStationaryCenter,
-    clamp(uEnvelopeStationary, 0.0, 1.0)
-  );
-}
-
-float segmentPositionForValue(float value, float time) {
-  float lengthValue = max(uSegmentLength, 0.05);
-  return (
-    value - (segmentCenter(time) - 0.5 * lengthValue)
-  ) / lengthValue;
-}
-
-float pathSegmentPosition(float progress, float time) {
-  if (uPathClosed < 0.5) {
-    return segmentPositionForValue(progress, time);
-  }
-  float lengthValue = min(max(uSegmentLength, 0.05), 0.98);
-  float travelingCenter = fract(time * uCurveTravel + 0.5);
-  float center = mix(
-    travelingCenter,
-    uStationaryCenter,
-    clamp(uEnvelopeStationary, 0.0, 1.0)
-  );
-  float delta = mod(progress - center + 0.5, 1.0) - 0.5;
-  return delta / lengthValue + 0.5;
-}
-
-float segmentEnvelope(float position) {
-  float tail = smoothstep(0.0, max(uTailTaper, 0.001), position);
-  float head = 1.0 - smoothstep(
-    1.0 - max(uHeadTaper, 0.001),
-    1.0,
-    position
-  );
-  return tail * head;
-}
-
-float mirrorCoordinate(float value) {
-  float wrapped = mod(value, 2.0);
-  if (wrapped < 0.0) wrapped += 2.0;
-  return wrapped <= 1.0 ? wrapped : 2.0 - wrapped;
-}
-
-float wrappedPaletteCoordinate(float value) {
-  if (uPaletteWrap > 1.5) return mirrorCoordinate(value);
-  if (uPaletteWrap > 0.5) return fract(value);
-  return clamp(value, 0.0, 1.0);
-}
-
-vec3 spatialPalette(float position) {
-  float wrapped = wrappedPaletteCoordinate(position - uPaletteOffset);
-  float palettePosition;
-  if (uPaletteWrap > 0.5 && uPaletteWrap < 1.5) {
-    palettePosition = mix(
-      0.5 + 0.5 * PALETTE_TEXEL,
-      1.0 - 0.5 * PALETTE_TEXEL,
-      wrapped
-    );
-  } else {
-    palettePosition = mix(
-      0.5 * PALETTE_TEXEL,
-      0.5 - 0.5 * PALETTE_TEXEL,
-      wrapped
-    );
-  }
-  return texture(uPalette, vec2(palettePosition, 0.5)).rgb;
-}
-
-void sampleProfiles(
-  float position,
-  out float widthScale,
-  out float opacityScale,
-  out float intensityScale,
-  out float glowScale,
-  out float upperGlowSpreadScale,
-  out float lowerGlowSpreadScale,
-  out float reflectionScale,
-  out float colorPositionOffset
-) {
-  float coordinate = clamp(position, 0.0, 1.0);
-  vec4 primary = texture(uProfiles, vec2(coordinate, 0.25));
-  vec4 secondary = texture(uProfiles, vec2(coordinate, 0.75));
-  widthScale = max(primary.r * 4.0 * uVelocityWidthScale, 0.0001);
-  opacityScale = primary.g * 4.0;
-  intensityScale = primary.b * 4.0;
-  glowScale = max(primary.a * 4.0 * uVelocityGlowScale, 0.0001);
-  upperGlowSpreadScale = max(secondary.b * 4.0, 0.0001);
-  lowerGlowSpreadScale = max(secondary.a * 4.0, 0.0001);
-  reflectionScale = secondary.r * 4.0 * uVelocityReflectionScale;
-  colorPositionOffset = secondary.g * 4.0 - 2.0;
-}
-
-float sampleK0(float argument) {
-  if (argument >= K0_MAX_ARGUMENT) return 0.0;
-  float normalized = sqrt(
-    clamp(
-      max(argument, K0_MIN_ARGUMENT) / K0_MAX_ARGUMENT,
-      0.0,
-      1.0
-    )
-  );
-  return texture(uK0Lut, vec2(normalized, 0.5)).r;
-}
-
-float lineKernel(float coefficient, float radius, float spread) {
-  float safeSpread = max(spread, 0.00001);
-  float effectiveCoefficient = coefficient / safeSpread;
-  return (
-    effectiveCoefficient / PI
-  ) * sampleK0(effectiveCoefficient * radius);
-}
-
-void accumulateSource(
-  float sourceParameter,
-  float quadratureWeight,
-  vec2 query,
-  vec2 segmentStart,
-  vec2 segmentVector,
-  vec2 tangent,
-  float segmentLength,
-  inout vec3 waveSum,
-  inout float coreSum,
-  inout vec3 reflectionColorSum,
-  inout float reflectionEnergySum
-) {
-  vec2 sourcePoint = segmentStart + segmentVector * sourceParameter;
-  vec2 offset = query - sourcePoint;
-  float signedPerpendicular =
-    tangent.x * offset.y - tangent.y * offset.x;
-  float perpendicularDistance = abs(signedPerpendicular);
-  float sideDirection = signedPerpendicular >= 0.0 ? 1.0 : -1.0;
-  float progress = mix(
-    vProgressRange.x,
-    vProgressRange.y,
-    sourceParameter
-  );
-  float endpointWeight = mix(
-    vEndpointWeights.x,
-    vEndpointWeights.y,
-    sourceParameter
-  );
-
-  float fullClosedLoop = step(0.5, uPathClosed)
-    * (1.0 - step(0.5, uClosedLoopTaper));
-  float position = mix(
-    pathSegmentPosition(progress, uTime),
-    progress,
-    fullClosedLoop
-  );
-  float widthScale;
-  float opacityScale;
-  float intensityScale;
-  float glowScale;
-  float upperGlowSpreadScale;
-  float lowerGlowSpreadScale;
-  float reflectionScale;
-  float colorPositionOffset;
-  sampleProfiles(
-    position,
-    widthScale,
-    opacityScale,
-    intensityScale,
-    glowScale,
-    upperGlowSpreadScale,
-    lowerGlowSpreadScale,
-    reflectionScale,
-    colorPositionOffset
-  );
-  float geometricAlpha = mix(
-    pow(segmentEnvelope(position), 0.55),
-    1.0,
-    fullClosedLoop
-  ) * endpointWeight;
-  float segmentAlpha = geometricAlpha * opacityScale * uVisibility;
-  if (segmentAlpha <= 0.000001) return;
-
-  float taperWidth = mix(0.025, 1.0, geometricAlpha) * widthScale;
-  float normalizedPerpendicular =
-    perpendicularDistance / max(taperWidth, 0.000001);
-  float upperSide = 0.5 + 0.5 * sideDirection
-    * smoothstep(0.0, 0.03, normalizedPerpendicular);
-  float directionalSpread = mix(
-    max(uLowerGlowSpread * lowerGlowSpreadScale, 0.05),
-    max(uUpperGlowSpread * upperGlowSpreadScale, 0.05),
-    upperSide
-  );
-  float profileSpread =
-    max(uBandSpread * glowScale, 0.001)
-    * directionalSpread * taperWidth;
-  float pixelRadius = 0.08 / max(uTargetResolution.y, 1.0);
-  float radialDistance = sqrt(
-    dot(offset, offset) + pixelRadius * pixelRadius
-  );
-
-  float atmosphere = uLayerMask0.x
-    * lineKernel(4.6, radialDistance, profileSpread);
-  float broad = uLayerMask0.y
-    * lineKernel(6.2, radialDistance, profileSpread);
-  float body = uLayerMask0.z
-    * lineKernel(11.0, radialDistance, profileSpread);
-  float ridge = uLayerMask0.w
-    * lineKernel(20.0, radialDistance, profileSpread);
-  float core = uLayerMask1.x
-    * lineKernel(92.0, radialDistance, profileSpread);
-  float veil = uLayerMask1.y
-    * lineKernel(25.0, radialDistance, profileSpread);
-  float arcWeight = segmentLength * quadratureWeight;
-
-  vec3 waveColor = spatialPalette(position + colorPositionOffset);
-  vec3 paleColor = mix(
-    waveColor,
-    vec3(0.90, 1.0, 0.98),
-    0.18
-  );
-  vec3 coreColor = mix(paleColor, vec3(1.0), 0.05);
-  float longitudinal = mix(
-    0.80,
-    1.0,
-    smoothstep(0.08, 0.88, clamp(position, 0.0, 1.0))
-  );
-  float glowBias = clamp(uGlowAsymmetry, -1.0, 1.0);
-  float outerDirection = sideDirection
-    * smoothstep(0.0, 0.14, normalizedPerpendicular);
-  float bodyDirection = sideDirection
-    * smoothstep(0.0, 0.09, normalizedPerpendicular);
-  float outerBloom = 0.72 + 0.44 * glowBias * outerDirection;
-  float bodyBloom = 0.89 + 0.41 * glowBias * bodyDirection;
-
-  vec3 sourceWave = (
-      waveColor * atmosphere * uMaterialWeights0.x * outerBloom
-      + waveColor * broad * uMaterialWeights0.y * outerBloom
-      + waveColor * body * uMaterialWeights0.z * bodyBloom
-      + paleColor * ridge * uMaterialWeights0.w
-      + coreColor * core * uMaterialWeights1.x
-      + waveColor * veil * uMaterialWeights1.y
-    ) * uBrightness * uMaterialWeights1.z * intensityScale
-      * longitudinal * segmentAlpha * arcWeight;
-  sourceWave = uHueMatrix * sourceWave;
-  float waveLuminance = dot(sourceWave, LUMA);
-  float saturationBase = 1.0 - clamp(core * arcWeight, 0.0, 1.0);
-  float saturationBoost = 1.0
-    + 0.45 * uMaterialWeights1.w * saturationBase * saturationBase;
-  vec3 saturatedWave = max(
-    vec3(0.0),
-    mix(vec3(waveLuminance), sourceWave, saturationBoost)
-  );
-  float saturatedLuminance = dot(saturatedWave, LUMA);
-  waveSum += saturatedWave
-    * waveLuminance / max(saturatedLuminance, 0.0001);
-  coreSum += core * arcWeight;
-
-  float reflectionEnergy = (
-      broad * 0.36 + body * 0.54 + ridge * 0.34
-    ) * segmentAlpha * reflectionScale * arcWeight;
-  vec3 reflectionColor = mix(waveColor, paleColor, 0.28);
-  reflectionColorSum += reflectionColor * reflectionEnergy;
-  reflectionEnergySum += reflectionEnergy;
-}
-
-void main() {
-  float aspect = uCanvasResolution.x
-    / max(uCanvasResolution.y, 1.0);
-  vec2 queryUv = gl_FragCoord.xy / uTargetResolution;
-  vec2 query = vec2(queryUv.x * aspect, queryUv.y);
-  vec2 start = vec2(vSegmentStart.x * aspect, vSegmentStart.y);
-  vec2 end = vec2(vSegmentEnd.x * aspect, vSegmentEnd.y);
-  vec2 segmentVector = end - start;
-  float segmentLength = length(segmentVector);
-  if (segmentLength <= 0.000001) discard;
-  vec2 tangent = segmentVector / segmentLength;
-
-  vec3 waveSum = vec3(0.0);
-  float coreSum = 0.0;
-  vec3 reflectionColorSum = vec3(0.0);
-  float reflectionEnergySum = 0.0;
-
-  if (uQuadraturePoints > 3.0) {
-    accumulateSource(0.0694318442, 0.1739274226, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-    accumulateSource(0.3300094782, 0.3260725774, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-    accumulateSource(0.6699905218, 0.3260725774, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-    accumulateSource(0.9305681558, 0.1739274226, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-  } else {
-    accumulateSource(0.2113248654, 0.5, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-    accumulateSource(0.7886751346, 0.5, query, start, segmentVector, tangent, segmentLength, waveSum, coreSum, reflectionColorSum, reflectionEnergySum);
-  }
-
-  outWave = vec4(waveSum, coreSum);
-  outReflection = vec4(
-    reflectionColorSum,
-    reflectionEnergySum
-  );
-}
-`;
-
-const PATH_INTEGRAL_ALL_LAYER_EVALUATION = `  float atmosphere = uLayerMask0.x
-    * lineKernel(4.6, radialDistance, profileSpread);
-  float broad = uLayerMask0.y
-    * lineKernel(6.2, radialDistance, profileSpread);
-  float body = uLayerMask0.z
-    * lineKernel(11.0, radialDistance, profileSpread);
-  float ridge = uLayerMask0.w
-    * lineKernel(20.0, radialDistance, profileSpread);
-  float core = uLayerMask1.x
-    * lineKernel(92.0, radialDistance, profileSpread);
-  float veil = uLayerMask1.y
-    * lineKernel(25.0, radialDistance, profileSpread);`;
-
-const PATH_INTEGRAL_LAYER_EVALUATIONS = [
-  `  if (
-    4.6 * radialDistance / max(profileSpread, 0.00001)
-      >= K0_MAX_ARGUMENT
-  ) return;
-  float atmosphere = lineKernel(4.6, radialDistance, profileSpread);
-  float broad = lineKernel(6.2, radialDistance, profileSpread);
-  float body = lineKernel(11.0, radialDistance, profileSpread);
-  float ridge = 0.0;
-  float core = 0.0;
-  float veil = 0.0;`,
-  `  if (
-    20.0 * radialDistance / max(profileSpread, 0.00001)
-      >= K0_MAX_ARGUMENT
-  ) return;
-  float atmosphere = 0.0;
-  float broad = 0.0;
-  float body = 0.0;
-  float ridge = lineKernel(20.0, radialDistance, profileSpread);
-  float core = 0.0;
-  float veil = lineKernel(25.0, radialDistance, profileSpread);`,
-  `  if (
-    92.0 * radialDistance / max(profileSpread, 0.00001)
-      >= K0_MAX_ARGUMENT
-  ) return;
-  float atmosphere = 0.0;
-  float broad = 0.0;
-  float body = 0.0;
-  float ridge = 0.0;
-  float core = lineKernel(92.0, radialDistance, profileSpread);
-  float veil = 0.0;`,
-] as const;
-
-/**
- * The generic shader remains exported as the frozen parity reference. Runtime
- * rendering uses compile-time layer specialization so each HDR pass evaluates
- * only the kernels it can actually contribute.
- */
-export const PATH_INTEGRAL_FRAGMENT_SHADERS =
-  PATH_INTEGRAL_LAYER_EVALUATIONS.map((evaluation) =>
-    PATH_INTEGRAL_FRAGMENT_SHADER.replace(
-      PATH_INTEGRAL_ALL_LAYER_EVALUATION,
-      evaluation,
-    ),
-  ) as unknown as readonly [string, string, string];
-
-export const PATH_INTEGRAL_COMPOSITE_FRAGMENT_SHADER = `#version 300 es
-precision highp float;
-
-out vec4 fragmentColor;
-
-uniform vec2 uRes;
-uniform float uTime;
-uniform sampler2D uFarWave;
-uniform sampler2D uFarReflection;
-uniform sampler2D uMidWave;
-uniform sampler2D uMidReflection;
-uniform sampler2D uCoreWave;
-uniform sampler2D uDotMask;
-uniform float uSpacing;
-uniform float uDotR;
-uniform float uDotAlpha;
-uniform float uTwinkle;
-uniform float uReflect;
-uniform float uNoisePhase;
-uniform vec2 uDotPointer;
-uniform float uDotPointerActive;
-uniform float uDotPointerRadius;
-uniform float uDotPointerSoftness;
-uniform float uDotPointerBrightness;
-uniform vec3 uDotPointerColor;
-uniform float uDotPointerColorStrength;
-uniform float uDotPointerMagnification;
-uniform sampler2D uBackgroundImage;
-uniform float uBackgroundOpacity;
-
-const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
-
-${COMMON_THEME_GLSL}
-
-float hash21(vec2 point) {
-  point = fract(point * vec2(123.34, 456.21));
-  point += dot(point, point + 45.32);
-  return fract(point.x * point.y);
-}
-
-vec4 composeDots(
-  vec2 fragmentCoordinate,
-  vec2 uv,
-  float reflectionEnergy,
-  vec3 reflectionColor
-) {
-  vec2 pointerCoordinate = uDotPointer * uRes;
-  float pointerDistance = length(fragmentCoordinate - pointerCoordinate);
-  float pointerInnerRadius = uDotPointerRadius * (1.0 - uDotPointerSoftness);
-  float pointerInfluence = uDotPointerActive * (
-    1.0 - smoothstep(
-      pointerInnerRadius,
-      max(uDotPointerRadius, pointerInnerRadius + 0.001),
-      pointerDistance
-    )
-  );
-  float magnification = mix(
-    1.0,
-    max(uDotPointerMagnification, 0.25),
-    pointerInfluence
-  );
-  vec2 sampledCoordinate = pointerCoordinate +
-    (fragmentCoordinate - pointerCoordinate) / magnification;
-  vec2 grid = mix(fragmentCoordinate, sampledCoordinate, pointerInfluence)
-    / uSpacing;
-  vec2 cellId = floor(grid);
-  vec2 cellPosition = (fract(grid) - 0.5) * uSpacing;
-  float radiusSquared = dot(cellPosition, cellPosition);
-  float random1 = hash21(cellId);
-  float random2 = hash21(cellId + 13.7);
-  float pulse = 0.5 + 0.5 * sin(
-    uTime * (6.2831 / (2.0 + 3.0 * random2))
-      + random1 * 6.2831
-  );
-  pulse *= pulse;
-  float twinklePulse = mix(pulse, 1.0 - pulse, lightThemeMix());
-  float dotScale = (1.0 + 0.5 * uTwinkle * twinklePulse) * magnification;
-  float dotAmplitude = mix(
-    0.55,
-    0.35 + 0.65 * twinklePulse,
-    uTwinkle
-  );
-  float sigma = max(uDotR * dotScale, 0.0001);
-  float dotSignal = exp(
-    -radiusSquared / (2.0 * sigma * sigma)
-  ) * dotAmplitude;
-  float dotMask = texture(uDotMask, uv).r;
-  float reflected = clamp(
-    reflectionEnergy * uReflect,
-    0.0,
-    1.0
-  );
-  vec3 dotColor = mix(
-    vec3(0.62, 0.66, 0.72),
-    reflectionColor,
-    0.10 + 0.85 * reflected
-  );
-  dotColor = mix(
-    dotColor,
-    uDotPointerColor,
-    pointerInfluence * uDotPointerColorStrength
-  );
-  float dotLuminance =
-    uDotAlpha * dotMask * (0.38 + 1.1 * reflected);
-  float dotEnergy = dotSignal * dotLuminance *
-    max(0.0, 1.0 + pointerInfluence * uDotPointerBrightness);
-  vec3 darkContribution = dotColor * dotEnergy;
-  vec3 lightDotColor = mix(
-    vec3(0.30, 0.32, 0.36),
-    lightThemeTintColor(reflectionColor),
-    0.10 + 0.72 * reflected
-  );
-  float lightCoverage = clamp(dotEnergy * 1.55, 0.0, 0.82);
-  float lightTheme = lightThemeMix();
-  return vec4(
-    mix(darkContribution, lightDotColor, lightTheme),
-    lightCoverage * lightTheme
-  );
-}
-
-float displayNoise(vec2 fragmentCoordinate) {
-  return (
-    hash21(fragmentCoordinate + uNoisePhase) - 0.5
-  ) / 255.0 * 2.0;
-}
-
-void main() {
-  vec2 fragmentCoordinate = gl_FragCoord.xy;
-  vec2 uv = fragmentCoordinate / uRes;
-  vec4 farWave = texture(uFarWave, uv);
-  vec4 midWave = texture(uMidWave, uv);
-  vec4 coreWave = texture(uCoreWave, uv);
-  vec3 wave = farWave.rgb + midWave.rgb + coreWave.rgb;
-
-  vec4 farReflection = texture(uFarReflection, uv);
-  vec4 midReflection = texture(uMidReflection, uv);
-  vec4 reflection = farReflection + midReflection;
-  float reflectionEnergy = reflection.a;
-  vec3 reflectionColor = reflectionEnergy > 0.000001
-    ? reflection.rgb / reflectionEnergy
-    : vec3(0.90, 0.95, 1.0);
-
-  vec4 dots = composeDots(
-    fragmentCoordinate,
-    uv,
-    reflectionEnergy,
-    reflectionColor
-  );
-  float lightTheme = lightThemeMix();
-  vec4 imageBackground = texture(uBackgroundImage, uv);
-  vec3 background = mix(
-    themeBackground(uv),
-    imageBackground.rgb,
-    imageBackground.a * uBackgroundOpacity
-  );
-  vec3 color = composeThemedWave(background, wave);
-  color += dots.rgb * (1.0 - lightTheme);
-  color = mix(color, dots.rgb, dots.a);
-  color += displayNoise(fragmentCoordinate) * (1.0 - lightTheme);
-  fragmentColor = vec4(color, 1.0);
 }
 `;

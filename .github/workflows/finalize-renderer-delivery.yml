@@ -1,0 +1,162 @@
+name: Finalize renderer delivery PR
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - perf/final-renderer-results.json
+      - perf/final-renderer-results.md
+      - .github/workflows/finalize-renderer-delivery.yml
+  workflow_dispatch:
+
+permissions:
+  checks: read
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out final delivery branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-validated-renderer
+
+      - name: Verify accepted final proof
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          report = json.loads(Path("perf/final-renderer-results.json").read_text())
+          current_tree = subprocess.check_output(
+              ["git", "rev-parse", "HEAD:src"], text=True
+          ).strip()
+          if report.get("sourceTreeSha") != current_tree:
+              raise SystemExit("the accepted proof does not match the current src tree")
+          if report.get("accepted") is not True:
+              raise SystemExit("final visual/GPU/pointer proof is not accepted")
+          if report.get("gpuTargetReached") is not True:
+              raise SystemExit("the required half-GPU target was not reached")
+          if report.get("coldStartAccepted") is not True:
+              raise SystemExit("the cold-start timing budget was not accepted")
+          if report.get("productionWallAccepted") is not True:
+              raise SystemExit("the production wall benchmark was not accepted")
+          PY
+
+      - name: Verify the PR target and current CI
+        run: |
+          gh pr list \
+            --repo Fefedu973/lumathread \
+            --head perf/final-validated-renderer \
+            --state open \
+            --json number,baseRefName,headRefOid \
+            > /tmp/final-pr.json
+          current_head=$(git rev-parse HEAD)
+          python - "$current_head" <<'PY' > /tmp/final-pr-number
+          import json, sys
+          rows = json.load(open("/tmp/final-pr.json"))
+          if len(rows) != 1:
+              raise SystemExit(f"expected exactly one final delivery PR, found {len(rows)}")
+          row = rows[0]
+          if row.get("baseRefName") != "main":
+              raise SystemExit(f"final delivery PR targets {row.get('baseRefName')}, not main")
+          if row.get("headRefOid") != sys.argv[1]:
+              raise SystemExit("final delivery PR head does not match the checked-out commit")
+          print(row["number"])
+          PY
+          python - "$current_head" <<'PY'
+          import json, subprocess, sys, time
+          head = sys.argv[1]
+          deadline = time.time() + 900
+          while time.time() < deadline:
+              payload = json.loads(subprocess.check_output([
+                  "gh", "api",
+                  f"repos/Fefedu973/lumathread/commits/{head}/check-runs",
+              ], text=True))
+              checks = [
+                  check for check in payload.get("check_runs", [])
+                  if check.get("name") == "validate"
+              ]
+              if any(check.get("conclusion") == "success" for check in checks):
+                  break
+              failures = [
+                  check.get("conclusion") for check in checks
+                  if check.get("status") == "completed"
+                  and check.get("conclusion") != "success"
+              ]
+              if failures:
+                  raise SystemExit(f"current CI validation failed: {failures}")
+              time.sleep(10)
+          else:
+              raise SystemExit("timed out waiting for current CI validation")
+          PY
+
+      - name: Update and publish the final PR
+        run: |
+          final_pr=$(cat /tmp/final-pr-number)
+          test -n "$final_pr"
+          {
+            cat <<'EOF'
+          ## Final materialized renderer delivery
+
+          This PR commits the optimized `src/` tree itself. It does not rely on CI-only transforms at runtime or after merge.
+
+          The exact source SHA was compared directly with the frozen original renderer on Hero/CTA, dark/light and desktop/mobile DPR 2 surfaces. Pointer entry, movement, leave, settling and cache recovery are covered independently.
+          Cold-start timing is checked against explicit regression budgets; WebGL resource allocation is recorded as an audit so its runtime tradeoff stays visible.
+
+          EOF
+            cat perf/final-renderer-results.md
+            cat <<'EOF'
+
+          ## Merge notes
+
+          - The generic renderer remains the fallback outside the proved signatures.
+          - Hero temporal anchors run at 15 Hz and interpolate at display refresh rate.
+          - Stable anchored CTA anchors run at 10 Hz, return immediately to exact frame-by-frame rendering during pointer interaction, and resume only after the configured transition settles.
+          - The report records both drained GPU timings and an uninstrumented wall/FPS matrix. A requested target that is not reached is explicitly reported rather than hidden.
+          EOF
+          } > /tmp/final-pr-body.md
+          gh pr edit "$final_pr" \
+            --repo Fefedu973/lumathread \
+            --title "perf: ship the final validated Lumathread renderer" \
+            --body-file /tmp/final-pr-body.md
+          gh pr ready "$final_pr" --repo Fefedu973/lumathread
+          echo "$final_pr" > /tmp/final-pr-number
+
+      - name: Close superseded performance PRs with provenance intact
+        run: |
+          final_pr=$(cat /tmp/final-pr-number)
+          gh pr list \
+            --repo Fefedu973/lumathread \
+            --state open \
+            --limit 100 \
+            --json number,headRefName,title \
+            > /tmp/open-prs.json
+          python - "$final_pr" <<'PY' > /tmp/superseded-prs.txt
+          import json, sys
+          final_pr = int(sys.argv[1])
+          rows = json.load(open('/tmp/open-prs.json'))
+          for row in rows:
+              number = int(row['number'])
+              head = row.get('headRefName', '')
+              if number == final_pr:
+                  continue
+              if head == 'perf/visual-parity-renderer-optimization' or head.startswith('perf/major-2x-') or head.startswith('perf/path-source-') or head.startswith('perf/glass-diffusion-'):
+                  print(number)
+          PY
+          while read -r number; do
+            test -n "$number" || continue
+            gh pr comment "$number" \
+              --repo Fefedu973/lumathread \
+              --body "Superseded by final materialized delivery #${final_pr}. This PR remains available as experimental provenance; its result was either promoted into, revalidated against, or rejected before the final stack."
+            gh pr close "$number" \
+              --repo Fefedu973/lumathread \
+              --comment "Closing the experimental branch in favor of #${final_pr}."
+          done < /tmp/superseded-prs.txt

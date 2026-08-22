@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "perf/harness", "vite.perf.config.ts"]
+}

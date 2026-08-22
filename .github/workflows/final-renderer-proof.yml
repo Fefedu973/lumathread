@@ -1,0 +1,213 @@
+name: Final committed renderer proof
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - src/**
+      - perf/final-renderer-provenance.md
+      - perf/harness/**
+      - perf/scripts/add-final-cta-parity-snapshots.mjs
+      - perf/scripts/add-temporal-parity-snapshots.mjs
+      - perf/scripts/benchmark-core.mjs
+      - perf/scripts/benchmark-suite.mjs
+      - perf/scripts/benchmark-suite.test.mjs
+      - perf/scripts/evaluate-final-renderer-benchmark.py
+      - .github/workflows/final-renderer-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-committed-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out exact committed candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify candidate is materialized, not transform-only
+        run: |
+          grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'const temporalSettingsKey = temporalPathSettingsKey(' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'const temporalActive = temporalSettingsKey !== null;' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'ensureTemporalPathTargets(resources)' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'temporalSecondBankReady' src/runtime/path-renderer.ts
+          grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
+            src/rendering/path-shaders.ts
+          test -f perf/final-renderer-provenance.md
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and validate committed candidate
+        run: |
+          bun install --frozen-lockfile
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Add off-anchor and sequential temporal captures
+        run: |
+          if [ ! -f perf/scripts/add-temporal-parity-snapshots.mjs ]; then
+            git fetch --no-tags origin perf/major-2x-final-temporal
+            git show \
+              origin/perf/major-2x-final-temporal:perf/scripts/add-temporal-parity-snapshots.mjs \
+              > perf/scripts/add-temporal-parity-snapshots.mjs
+          fi
+          node perf/scripts/add-temporal-parity-snapshots.mjs
+          node perf/scripts/add-final-cta-parity-snapshots.mjs
+          bunx biome format --write \
+            perf/scripts/benchmark.mjs \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/add-temporal-parity-snapshots.mjs \
+            perf/scripts/add-final-cta-parity-snapshots.mjs
+
+      - name: Check out frozen original renderer
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
+      - name: Install original and inject identical harness
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build exact candidate and original harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual comparison dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run original-to-final paired renderer benchmark
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --repeats 2 \
+            --frames 12 \
+            --warmup-frames 8 \
+            --profile-frames 8
+
+      - name: Compare all direct and sequential captures
+        id: visual
+        continue-on-error: true
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Evaluate direct GPU and instrumented wall ratios
+        id: target
+        continue-on-error: true
+        run: |
+          python perf/scripts/evaluate-final-renderer-benchmark.py \
+            --input perf-results/benchmark.json \
+            --output perf-results/final-renderer-proof.json \
+            --markdown perf-results/final-renderer-proof.md \
+            --target-gpu-ratio 0.5 \
+            --max-scenario-gpu-ratio 1.03
+
+      - name: Publish final proof summary
+        if: always()
+        run: |
+          test ! -f perf-results/final-renderer-proof.md \
+            || cat perf-results/final-renderer-proof.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f perf-results/visual/visual-diff.md ]; then
+            printf '\n' >> "$GITHUB_STEP_SUMMARY"
+            cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Collect exact provenance and server logs
+        if: always()
+        run: |
+          mkdir -p perf-results/candidate perf-results/server-logs
+          git diff --binary 7f4289aa3ff640f479701ceec0b0d790af037692 -- src \
+            > perf-results/candidate/final-renderer.patch
+          cp perf/final-renderer-provenance.md perf-results/candidate/ 2>/dev/null || true
+          cp perf/materialized-final-temporal-stack.txt perf-results/candidate/ 2>/dev/null || true
+          cp /tmp/baseline.log perf-results/server-logs/ 2>/dev/null || true
+          cp /tmp/candidate.log perf-results/server-logs/ 2>/dev/null || true
+
+      - name: Upload exact source, metrics and captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-renderer-proof-${{ github.sha }}
+          path: |
+            perf-results
+            src
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop deterministic servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+      - name: Enforce visual parity
+        if: always() && steps.visual.outcome == 'failure'
+        run: exit 1
+
+      - name: Enforce half-GPU target
+        if: always() && steps.target.outcome == 'failure'
+        run: exit 1

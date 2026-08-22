@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   PATH_INTEGRAL_FRAGMENT_SHADER,
   PATH_INTEGRAL_FRAGMENT_SHADERS,
-} from "../rendering/shaders";
+} from "../rendering/path-shaders";
 
 function kernelCallCount(source: string) {
   return source.match(/lineKernel\(/g)?.length ?? 0;

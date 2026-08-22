@@ -40,6 +40,7 @@ export interface DrawControllerOptions {
   pointerState: FollowPointerState;
   getClockTime: () => number;
   getSceneFadeProgress: () => number;
+  isInitialFramePresented: () => boolean;
   isRunning: () => boolean;
   requestFrame: () => void;
   activateProgram: (program: WebGLProgram | null) => void;

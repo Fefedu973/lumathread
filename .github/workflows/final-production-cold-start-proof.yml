@@ -1,0 +1,330 @@
+name: Final production cold-start proof
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - src/**
+      - perf/final-renderer-provenance.md
+      - perf/scripts/benchmark-final-cold-start.mjs
+      - .github/workflows/final-production-cold-start-proof.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: final-production-cold-start-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Cold start (${{ matrix.surface }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      # Fresh Chrome launches are deliberately expensive. Limiting concurrent
+      # surfaces keeps shared-runner contention from dominating the paired
+      # renderer measurements.
+      max-parallel: 2
+      matrix:
+        surface:
+          - hero-dark-desktop
+          - hero-light-desktop
+          - cta-dark-desktop
+          - cta-light-desktop
+          - hero-dark-mobile-2x
+          - hero-light-mobile-2x
+          - cta-dark-mobile-2x
+          - cta-light-mobile-2x
+
+    steps:
+      - name: Check out exact materialized candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install and validate candidate
+        run: |
+          bun install --frozen-lockfile
+          test -f perf/final-renderer-provenance.md
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out frozen original renderer
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
+      - name: Install original and inject identical harness
+        run: |
+          cd baseline
+          bun install --frozen-lockfile
+          cd ..
+          python perf/scripts/patch-original-debug-stepping.py \
+            baseline/src/runtime/use-hero-wave-renderer.ts
+          cd baseline
+          bunx biome format --write src/runtime/use-hero-wave-renderer.ts
+          bun run check
+          cd ..
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+
+      - name: Build candidate and original harnesses
+        run: |
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Start static servers
+        run: |
+          python -m http.server 4173 --bind 127.0.0.1 \
+            --directory perf-dist-baseline >/tmp/baseline.log 2>&1 &
+          echo $! >/tmp/baseline.pid
+          python -m http.server 4174 --bind 127.0.0.1 \
+            --directory perf-dist-candidate >/tmp/candidate.log 2>&1 &
+          echo $! >/tmp/candidate.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 100); do
+              curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null && break
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run fresh-Chrome paired cold-start samples
+        run: |
+          bun perf/scripts/benchmark-final-cold-start.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out cold-start-results \
+            --surface "${{ matrix.surface }}" \
+            --repeats 8
+
+      - name: Validate surface report
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("cold-start-results/cold-start.json").read_text())
+          expected = "${{ matrix.surface }}"
+          if report.get("surface") != expected:
+              raise SystemExit(f"expected {expected}, received {report.get('surface')}")
+          if report.get("repeats") != 8:
+              raise SystemExit("cold-start repeat count is incomplete")
+          for key in ("hostReady", "browserReady"):
+              value = report.get("ratios", {}).get(key)
+              if not isinstance(value, (int, float)) or value <= 0:
+                  raise SystemExit(f"missing positive {key} ratio")
+              pairs = report.get("pairedRatios", {}).get(key)
+              if not (
+                  isinstance(pairs, list)
+                  and len(pairs) == 8
+                  and all(isinstance(pair, (int, float)) and pair > 0 for pair in pairs)
+              ):
+                  raise SystemExit(f"expected 8 positive paired {key} ratios")
+          PY
+
+      - name: Publish surface cold-start summary
+        if: always()
+        run: |
+          test ! -f cold-start-results/cold-start.md \
+            || cat cold-start-results/cold-start.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs and exact manifest
+        if: always()
+        run: |
+          mkdir -p cold-start-results/server-logs cold-start-results/candidate
+          cp /tmp/baseline.log cold-start-results/server-logs/ 2>/dev/null || true
+          cp /tmp/candidate.log cold-start-results/server-logs/ 2>/dev/null || true
+          cp perf/final-renderer-provenance.md cold-start-results/candidate/
+
+      - name: Upload cold-start surface proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-cold-start-${{ matrix.surface }}-${{ github.sha }}
+          path: cold-start-results
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stop static servers
+        if: always()
+        run: |
+          test ! -f /tmp/baseline.pid || kill "$(cat /tmp/baseline.pid)" 2>/dev/null || true
+          test ! -f /tmp/candidate.pid || kill "$(cat /tmp/candidate.pid)" 2>/dev/null || true
+
+  aggregate:
+    name: Aggregate final cold-start budget
+    needs: benchmark
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all cold-start proofs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: final-cold-start-*-${{ github.sha }}
+          path: surface-results
+          merge-multiple: false
+
+      - name: Aggregate startup timing and allocation audit fail-closed
+        run: |
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+
+          expected = {
+              "hero-dark-desktop",
+              "hero-light-desktop",
+              "cta-dark-desktop",
+              "cta-light-desktop",
+              "hero-dark-mobile-2x",
+              "hero-light-mobile-2x",
+              "cta-dark-mobile-2x",
+              "cta-light-mobile-2x",
+          }
+          rows = []
+          for path in Path("surface-results").rglob("cold-start.json"):
+              report = json.loads(path.read_text())
+              ratios = report.get("ratios", {})
+              host = ratios.get("hostReady")
+              browser = ratios.get("browserReady")
+              host_pairs = report.get("pairedRatios", {}).get("hostReady")
+              if not all(
+                  isinstance(value, (int, float)) and value > 0
+                  for value in (host, browser)
+              ):
+                  raise SystemExit(f"{path}: incomplete ready ratios")
+              if not (
+                  isinstance(host_pairs, list)
+                  and len(host_pairs) == 8
+                  and all(
+                      isinstance(value, (int, float)) and value > 0
+                      for value in host_pairs
+                  )
+              ):
+                  raise SystemExit(f"{path}: incomplete paired host-ready ratios")
+              rows.append({
+                  "name": report.get("surface"),
+                  "hostReadyRatio": host,
+                  "browserReadyRatio": browser,
+                  "hostPairsWithinSurfaceBudget": sum(
+                      value <= 1.30 for value in host_pairs
+                  ),
+                  "createProgramRatio": ratios.get("createProgram"),
+                  "createTextureRatio": ratios.get("createTexture"),
+                  "createFramebufferRatio": ratios.get("createFramebuffer"),
+                  "bufferBytesRatio": ratios.get("bufferBytes"),
+                  "textureUploadPixelsRatio": ratios.get("textureUploadPixels"),
+                  "baseline": report.get("baseline"),
+                  "candidate": report.get("candidate"),
+              })
+
+          names = {row["name"] for row in rows}
+          if names != expected or len(rows) != 8:
+              raise SystemExit(
+                  f"fail-closed: expected {sorted(expected)}, received {sorted(names)} from {len(rows)} reports"
+              )
+
+          geometric = lambda key: math.exp(
+              sum(math.log(row[key]) for row in rows) / len(rows)
+          )
+          host_ratio = geometric("hostReadyRatio")
+          browser_ratio = geometric("browserReadyRatio")
+          worst_host = max(row["hostReadyRatio"] for row in rows)
+          tail_accepted = all(
+              row["hostPairsWithinSurfaceBudget"] >= 6 for row in rows
+          )
+          result = {
+              "accepted": (
+                  host_ratio <= 1.15
+                  and worst_host <= 1.30
+                  and tail_accepted
+              ),
+              "geometricHostReadyRatio": host_ratio,
+              "geometricBrowserReadyRatio": browser_ratio,
+              "worstSurfaceHostReadyRatio": worst_host,
+              "maximumGeometricRegression": 0.15,
+              "maximumSurfaceRegression": 0.30,
+              "minimumPairsWithinSurfaceBudget": 6,
+              "pairsPerSurface": 8,
+              "tailAccepted": tail_accepted,
+              "scenarioCount": len(rows),
+              "scenarios": sorted(rows, key=lambda row: row["name"]),
+          }
+          Path("final-cold-start-proof.json").write_text(
+              json.dumps(result, indent=2) + "\n"
+          )
+          lines = [
+              "# Final cold-start timing proof and allocation audit",
+              "",
+              f"- Verdict: **{'ACCEPT' if result['accepted'] else 'REJECT'}**",
+              f"- Geometric host ready ratio: **{host_ratio:.4f}**",
+              f"- Geometric browser ready ratio: **{browser_ratio:.4f}**",
+              f"- Worst surface host ready ratio: **{worst_host:.4f}**",
+              f"- Every surface has at least 6/8 paired ratios ≤ 1.30: **{'PASS' if tail_accepted else 'FAIL'}**",
+              "",
+              "| Scenario | Host ready ratio | Browser ready ratio | Pairs ≤ 1.30 | Program count ratio | Texture count ratio | Framebuffer count ratio | Texture-upload pixels ratio |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|",
+          ]
+          for row in result["scenarios"]:
+              def fmt(value):
+                  return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+              lines.append(
+                  f"| {row['name']} | {row['hostReadyRatio']:.4f} | "
+                  f"{row['browserReadyRatio']:.4f} | {row['hostPairsWithinSurfaceBudget']}/8 | "
+                  f"{fmt(row['createProgramRatio'])} | {fmt(row['createTextureRatio'])} | "
+                  f"{fmt(row['createFramebufferRatio'])} | {fmt(row['textureUploadPixelsRatio'])} |"
+              )
+          Path("final-cold-start-proof.md").write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+
+      - name: Publish aggregate cold-start proof
+        if: always()
+        run: |
+          test ! -f final-cold-start-proof.md \
+            || cat final-cold-start-proof.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload aggregate cold-start proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-cold-start-proof-${{ github.sha }}
+          path: |
+            final-cold-start-proof.json
+            final-cold-start-proof.md
+            surface-results
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce cold-start budget
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path("final-cold-start-proof.json")
+          if not path.exists():
+              raise SystemExit("final cold-start proof is missing")
+          result = json.loads(path.read_text())
+          if result.get("accepted") is not True:
+              raise SystemExit("cold-start budget exceeded: " + json.dumps(result))
+          PY

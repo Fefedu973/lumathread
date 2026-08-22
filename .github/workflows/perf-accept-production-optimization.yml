@@ -1,0 +1,192 @@
+name: Accept production renderer optimization
+
+on:
+  push:
+    branches:
+      - perf/visual-parity-renderer-optimization
+    paths:
+      - .github/workflows/perf-accept-production-optimization.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: accept-production-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out exact candidate commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install candidate dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Apply cumulative production optimization
+        run: |
+          bunx biome format --write \
+            perf/scripts/benchmark-suite.mjs \
+            perf/scripts/evaluate-paired-benchmark.mjs
+          node perf/scripts/apply-renderer-optimization.mjs
+          bunx biome format --write \
+            src/rendering/shaders.ts \
+            src/rendering/glass-mask.ts \
+            src/rendering/webgl-resources.ts \
+            src/runtime/resource-manager.ts \
+            src/runtime/glass-terrain-renderer.ts
+
+          git diff --name-only > /tmp/candidate-files.txt
+          grep -q '^src/' /tmp/candidate-files.txt
+          if grep -Ev '^(src/|perf/scripts/benchmark-suite.mjs$|perf/scripts/evaluate-paired-benchmark.mjs$)' /tmp/candidate-files.txt; then
+            echo "The production transform modified an unexpected file." >&2
+            cat /tmp/candidate-files.txt >&2
+            exit 1
+          fi
+
+      - name: Validate candidate source and harness
+        run: |
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+
+      - name: Check out frozen baseline
+        uses: actions/checkout@v4
+        with:
+          ref: 7f4289aa3ff640f479701ceec0b0d790af037692
+          path: baseline
+
+      - name: Install baseline dependencies and inject identical harness
+        run: |
+          mkdir -p baseline/perf
+          rm -rf baseline/perf/harness
+          cp -R perf/harness baseline/perf/harness
+          cp vite.perf.config.ts baseline/vite.perf.config.ts
+          cp tsconfig.perf.json baseline/tsconfig.perf.json
+          cd baseline
+          bun install --frozen-lockfile
+
+      - name: Build baseline and candidate harnesses
+        run: |
+          bunx vite build \
+            --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-candidate"
+          cd baseline
+          bunx tsc -p tsconfig.perf.json --noEmit
+          bunx vite build \
+            --config vite.perf.config.ts \
+            --outDir "$GITHUB_WORKSPACE/perf-dist-baseline"
+
+      - name: Install visual diff dependencies
+        run: python -m pip install --disable-pip-version-check pillow numpy scikit-image
+
+      - name: Start deterministic static servers
+        run: |
+          python -m http.server 4173 \
+            --bind 127.0.0.1 \
+            --directory perf-dist-baseline > /tmp/lumathread-baseline-server.log 2>&1 &
+          echo $! > /tmp/lumathread-baseline-server.pid
+          python -m http.server 4174 \
+            --bind 127.0.0.1 \
+            --directory perf-dist-candidate > /tmp/lumathread-candidate-server.log 2>&1 &
+          echo $! > /tmp/lumathread-candidate-server.pid
+          for port in 4173 4174; do
+            for attempt in $(seq 1 50); do
+              if curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null; then
+                break
+              fi
+              sleep 0.1
+            done
+            curl --fail --silent "http://127.0.0.1:${port}/" >/dev/null
+          done
+
+      - name: Run long paired benchmark on every surface
+        run: |
+          bun perf/scripts/benchmark.mjs \
+            --baseline http://127.0.0.1:4173 \
+            --candidate http://127.0.0.1:4174 \
+            --out perf-results \
+            --repeats 7 \
+            --frames 36 \
+            --warmup-frames 20 \
+            --profile-frames 10
+
+      - name: Enforce deterministic visual parity
+        run: |
+          python perf/scripts/visual-diff.py \
+            --baseline perf-results/screenshots/baseline \
+            --candidate perf-results/screenshots/candidate \
+            --out perf-results/visual
+
+      - name: Enforce paired performance acceptance
+        run: |
+          node perf/scripts/evaluate-paired-benchmark.mjs \
+            --input perf-results/benchmark.json \
+            --output perf-results/paired-evaluation.json \
+            --markdown perf-results/paired-evaluation.md \
+            --minimum-improvement 0.03 \
+            --maximum-regression 0.02 \
+            --minimum-scenarios 8
+
+      - name: Publish candidate report
+        if: always()
+        run: |
+          test ! -f perf-results/benchmark.md || cat perf-results/benchmark.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/visual/visual-diff.md || cat perf-results/visual/visual-diff.md >> "$GITHUB_STEP_SUMMARY"
+          test ! -f perf-results/paired-evaluation.md || cat perf-results/paired-evaluation.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload full acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accepted-production-candidate-${{ github.sha }}
+          path: |
+            perf-results
+            src/rendering/shaders.ts
+            src/rendering/glass-mask.ts
+            src/rendering/webgl-resources.ts
+            src/runtime/resource-manager.ts
+            src/runtime/glass-terrain-renderer.ts
+            /tmp/candidate-files.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Commit accepted renderer source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src
+          git diff --cached --quiet && {
+            echo "No renderer source change remained after validation." >&2
+            exit 1
+          }
+          git commit -m "perf: integrate validated production renderer optimization"
+          git push origin HEAD:perf/visual-parity-renderer-optimization
+
+      - name: Stop static servers
+        if: always()
+        run: |
+          for pidfile in \
+            /tmp/lumathread-baseline-server.pid \
+            /tmp/lumathread-candidate-server.pid; do
+            if [ -f "$pidfile" ]; then
+              kill "$(cat "$pidfile")" 2>/dev/null || true
+            fi
+          done

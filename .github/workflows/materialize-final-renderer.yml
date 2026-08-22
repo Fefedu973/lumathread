@@ -1,0 +1,119 @@
+name: Materialize final validated renderer
+
+on:
+  push:
+    branches:
+      - perf/final-validated-renderer
+    paths:
+      - perf/scripts/apply-final-validated-renderer.mjs
+      - perf/scripts/materialize-final-temporal-stack.sh
+      - .github/workflows/materialize-final-renderer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-final-renderer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out final delivery branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/final-validated-renderer
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Materialize the previously validated stack
+        run: |
+          if grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'const temporalSettingsKey = temporalPathSettingsKey(' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'const temporalActive = temporalSettingsKey !== null;' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'ensureTemporalPathTargets(resources)' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'temporalSecondBankReady' \
+              src/runtime/path-renderer.ts \
+            && grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
+              src/rendering/path-shaders.ts \
+            && test -f perf/final-renderer-provenance.md; then
+            echo "Final production source is already materialized."
+          else
+            bash perf/scripts/materialize-final-temporal-stack.sh
+            node perf/scripts/apply-final-validated-renderer.mjs
+            bunx biome format --write \
+              src \
+              perf/scripts/apply-final-validated-renderer.mjs \
+              perf/scripts/materialize-final-temporal-stack.sh
+          fi
+
+      - name: Validate exact materialized source
+        run: |
+          bun run check
+          bun run build
+          bunx tsc -p tsconfig.perf.json --noEmit
+          git diff --check
+          grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'const temporalSettingsKey = temporalPathSettingsKey(' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'const temporalActive = temporalSettingsKey !== null;' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'ensureTemporalPathTargets(resources)' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'temporalSecondBankReady' src/runtime/path-renderer.ts
+          grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
+            src/rendering/path-shaders.ts
+
+      - name: Write source provenance
+        run: |
+          cat > perf/final-renderer-provenance.md <<'EOF'
+          # Final renderer provenance
+
+          Frozen original comparison: `7f4289aa3ff640f479701ceec0b0d790af037692`.
+
+          The committed `src/` tree contains the directly selected renderer stack:
+
+          - exact CTA source-instanced q4 integration and support bounds;
+          - split idle dots with local exact pointer-warp fallback;
+          - bounded glass effect and persistent framebuffer resources;
+          - shared path segment upload, cached source-integral VAOs and static uniforms;
+          - lazy, cached compilation of only the Path shader variants used by the scene;
+          - a primary-only first render, with temporal targets allocated after presentation and one integral bank bootstrapped per frame;
+          - Hero HDR temporal anchors at 15 Hz;
+          - stable anchored CTA HDR temporal anchors at 10 Hz;
+          - immediate frame-by-frame fallback while the pointer is active;
+          - static non-temporal CTA composite shaders;
+          - generic fallback for unsupported settings.
+
+          This file and the materialized source are generated together, then TypeScript,
+          Biome and the production build are rerun before the commit is pushed.
+          EOF
+
+      - name: Commit materialized production source once
+        run: |
+          git add src perf/final-renderer-provenance.md \
+            perf/materialized-final-temporal-stack.txt
+          if git diff --cached --quiet; then
+            echo "Final production source is already materialized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "perf: materialize final validated renderer source"
+          git push origin HEAD:perf/final-validated-renderer

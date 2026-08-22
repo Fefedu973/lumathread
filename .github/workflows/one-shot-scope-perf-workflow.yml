@@ -1,0 +1,46 @@
+name: One-shot scope renderer performance workflow
+
+on:
+  push:
+    branches:
+      - perf/visual-parity-renderer-optimization
+    paths:
+      - .github/workflows/one-shot-scope-perf-workflow.yml
+
+permissions:
+  contents: write
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out optimization branch
+        uses: actions/checkout@v4
+        with:
+          ref: perf/visual-parity-renderer-optimization
+          fetch-depth: 0
+
+      - name: Restrict automatic performance runs and remove this workflow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/perf-visual-parity.yml")
+          source = path.read_text()
+          old = """on:\n  pull_request:\n  workflow_dispatch:\n"""
+          new = """on:\n  pull_request:\n    paths:\n      - src/**\n      - perf/**\n      - vite.perf.config.ts\n      - tsconfig.perf.json\n      - .github/workflows/perf-visual-parity.yml\n  workflow_dispatch:\n"""
+          if old not in source:
+              raise SystemExit("Expected workflow trigger block was not found")
+          path.write_text(source.replace(old, new, 1))
+          PY
+          rm .github/workflows/one-shot-scope-perf-workflow.yml
+
+      - name: Commit workflow scoping
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            .github/workflows/perf-visual-parity.yml \
+            .github/workflows/one-shot-scope-perf-workflow.yml
+          git commit -m "ci: scope renderer performance workflow paths"
+          git push origin HEAD:perf/visual-parity-renderer-optimization
