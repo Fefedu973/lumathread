@@ -44,8 +44,7 @@ async function resetMeasurements(page) {
   );
 }
 
-const GPU_QUERY_DRAIN_ATTEMPTS = 1_000;
-const GPU_QUERY_DRAIN_INTERVAL_MS = 10;
+const GPU_QUERY_DRAIN_ATTEMPTS = 240;
 
 function gpuTotalFrameMeanMs(profile) {
   if (Number.isFinite(profile?.totalFrameMeanMs)) {
@@ -64,7 +63,18 @@ async function drainGpuProfiler(page, expectedFrameCount) {
   for (let attempt = 1; attempt <= GPU_QUERY_DRAIN_ATTEMPTS; attempt += 1) {
     profile = await evaluate(
       page.client,
-      `(() => {
+      `(async () => {
+        // WebGL timer-query results are intentionally published only after
+        // control returns to the browser. Advancing a native animation frame
+        // matches the extension's conformance polling protocol and is required
+        // by Chromium's headless SwiftShader backend.
+        await new Promise((resolve) => {
+          const timeout = setTimeout(resolve, 100);
+          requestAnimationFrame(() => {
+            clearTimeout(timeout);
+            resolve();
+          });
+        });
         const profiler = window.__LUMATHREAD_GPU_PROFILER__;
         if (!profiler) return null;
         profiler.collect();
@@ -113,9 +123,6 @@ async function drainGpuProfiler(page, expectedFrameCount) {
         );
       }
       return profile;
-    }
-    if (attempt < GPU_QUERY_DRAIN_ATTEMPTS) {
-      await sleep(GPU_QUERY_DRAIN_INTERVAL_MS);
     }
   }
   throw new Error(
