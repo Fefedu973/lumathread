@@ -18,6 +18,8 @@ const candidateUrl = readArg("--candidate", "http://127.0.0.1:4174");
 const out = readArg("--out", "cold-start-results");
 const requestedSurface = readArg("--surface", "hero-dark-desktop");
 const repeats = Number(readArg("--repeats", "8"));
+const GPU_QUERY_DRAIN_ATTEMPTS = 240;
+const GPU_QUERY_RAF_TIMEOUT_MS = 100;
 
 const surfaces = {
   "hero-dark-desktop": {
@@ -80,6 +82,112 @@ const median = (values) => {
     : sorted[middle];
 };
 
+async function captureGpuCompletedReadyState(page) {
+  return evaluate(
+    page.client,
+    `(async () => {
+      const profiler = window.__LUMATHREAD_GPU_PROFILER__;
+      if (!profiler) throw new Error("GPU profiler is unavailable.");
+
+      const validateProfile = (profile) => {
+        if (!profile.supported) {
+          throw new Error("GPU timer-query extension is unavailable.");
+        }
+        if (profile.errors?.length) {
+          throw new Error(
+            \`GPU profiler reported errors: \${profile.errors.join(" | ")}\`,
+          );
+        }
+        if (profile.disjointCount > 0) {
+          throw new Error(
+            \`GPU timer queries became disjoint \${profile.disjointCount} time(s).\`,
+          );
+        }
+      };
+
+      const drainStartedMs = performance.now();
+      let pollAttempts = 0;
+      let rafYields = 0;
+      let timeoutFallbacks = 0;
+      let profile = profiler.snapshot();
+      validateProfile(profile);
+      while (
+        (pollAttempts === 0 || profile.pendingCount > 0) &&
+        pollAttempts < ${GPU_QUERY_DRAIN_ATTEMPTS}
+      ) {
+        // WebGL timer-query results are published asynchronously. Yielding a
+        // native animation frame lets Chromium finish the submitted image and
+        // matches the extension's conformance polling protocol without using
+        // the synchronous and distorting gl.finish().
+        const yieldKind = await new Promise((resolve) => {
+          let settled = false;
+          const settle = (kind) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(kind);
+          };
+          const timeout = setTimeout(
+            () => settle("timeout"),
+            ${GPU_QUERY_RAF_TIMEOUT_MS},
+          );
+          requestAnimationFrame(() => settle("animation-frame"));
+        });
+        pollAttempts += 1;
+        if (yieldKind === "animation-frame") rafYields += 1;
+        else timeoutFallbacks += 1;
+        profiler.collect();
+        profile = profiler.snapshot();
+        validateProfile(profile);
+      }
+      if (profile.pendingCount > 0) {
+        throw new Error(
+          \`GPU timer queries did not drain after \${pollAttempts} polling yield(s) (\${profile.pendingCount} pending).\`,
+        );
+      }
+
+      const counters = window.__LUMATHREAD_GL_STATS__?.counters ?? {};
+      const expectedSampleCount = [
+        "drawArrays",
+        "drawArraysInstanced",
+        "drawElements",
+        "drawElementsInstanced",
+      ].reduce((sum, name) => sum + (Number(counters[name]) || 0), 0);
+      if (!(profile.sampleCount > 0)) {
+        throw new Error("GPU profiler drained without a timer-query sample.");
+      }
+      if (profile.sampleCount !== expectedSampleCount) {
+        throw new Error(
+          \`GPU profiler collected \${profile.sampleCount} sample(s); expected \${expectedSampleCount} measured draw(s).\`,
+        );
+      }
+
+      const readyMs = performance.now();
+      return {
+        readyMs,
+        navigation:
+          performance.getEntriesByType("navigation")[0]?.toJSON?.() ?? null,
+        canvasReady:
+          document.querySelector("canvas")?.dataset.ready === "true",
+        rendererStatus:
+          window.__LUMATHREAD_HARNESS__?.rendererStatus ?? null,
+        rendererErrors:
+          window.__LUMATHREAD_HARNESS__?.rendererErrors ?? [],
+        gpuDrain: {
+          durationMs: readyMs - drainStartedMs,
+          pollAttempts,
+          rafYields,
+          timeoutFallbacks,
+          sampleCount: profile.sampleCount,
+          frameCount: profile.frameCount,
+          pendingCount: profile.pendingCount,
+        },
+        gl: JSON.parse(JSON.stringify(window.__LUMATHREAD_GL_STATS__ ?? null)),
+      };
+    })()`,
+  );
+}
+
 async function measureSide(baseUrl, side, repeat) {
   const processStarted = performance.now();
   const chrome = await startChrome();
@@ -100,24 +208,23 @@ async function measureSide(baseUrl, side, repeat) {
       surface.viewport,
     );
     await waitForHarness(page.client);
+    const browser = await captureGpuCompletedReadyState(page);
     const hostReadyMs = performance.now() - navigationStarted;
-    const browser = await evaluate(
-      page.client,
-      `(() => ({
-        readyMs: performance.now(),
-        navigation: performance.getEntriesByType("navigation")[0]?.toJSON?.() ?? null,
-        canvasReady: document.querySelector("canvas")?.dataset.ready === "true",
-        rendererStatus: window.__LUMATHREAD_HARNESS__?.rendererStatus ?? null,
-        rendererErrors: window.__LUMATHREAD_HARNESS__?.rendererErrors ?? [],
-        gl: JSON.parse(JSON.stringify(window.__LUMATHREAD_GL_STATS__ ?? null)),
-      }))()`,
-    );
     if (!browser.canvasReady) {
       throw new Error(`${side}: canvas did not report ready`);
     }
     if (browser.rendererErrors?.length) {
       throw new Error(
         `${side}: renderer errors: ${JSON.stringify(browser.rendererErrors)}`,
+      );
+    }
+    if (
+      browser.rendererStatus?.renderer !== "hdr" ||
+      browser.rendererStatus?.supported !== true ||
+      browser.rendererStatus?.approximate === true
+    ) {
+      throw new Error(
+        `${side}: renderer became unavailable during GPU completion: ${JSON.stringify(browser.rendererStatus)}`,
       );
     }
     return {
@@ -128,6 +235,7 @@ async function measureSide(baseUrl, side, repeat) {
       browserReadyMs: browser.readyMs,
       navigation: browser.navigation,
       rendererStatus: browser.rendererStatus,
+      gpuDrain: browser.gpuDrain,
       gl: browser.gl,
     };
   } finally {
@@ -162,6 +270,13 @@ const aggregate = (runs) => {
     browserStartedMs: median(runs.map((run) => run.browserStartedMs)),
     hostReadyMs: median(runs.map((run) => run.hostReadyMs)),
     browserReadyMs: median(runs.map((run) => run.browserReadyMs)),
+    gpuDrainMs: median(runs.map((run) => run.gpuDrain.durationMs)),
+    gpuDrainPollAttempts: median(runs.map((run) => run.gpuDrain.pollAttempts)),
+    gpuDrainRafYields: median(runs.map((run) => run.gpuDrain.rafYields)),
+    gpuDrainTimeoutFallbacks: median(
+      runs.map((run) => run.gpuDrain.timeoutFallbacks),
+    ),
+    gpuTimerSamples: median(runs.map((run) => run.gpuDrain.sampleCount)),
     contexts: median(runs.map((run) => Number(run.gl?.contexts ?? 0))),
     webgl2Contexts: median(
       runs.map((run) => Number(run.gl?.webgl2Contexts ?? 0)),
@@ -221,6 +336,8 @@ const result = {
   generatedAt: new Date().toISOString(),
   surface: requestedSurface,
   repeats,
+  completionProtocol:
+    "Canvas ready plus all initial EXT_disjoint_timer_query_webgl2 samples published after event-loop yields led by native requestAnimationFrame (100 ms task fallback); gl.finish is not used.",
   raw,
   baseline,
   candidate,
@@ -243,10 +360,19 @@ const format = (value, digits = 2) =>
     : "n/a";
 const markdown = `# Cold-start proof: ${requestedSurface}
 
+Ready is recorded only after the canvas reports ready and every initial GPU
+timer query has been published. Polling yields native animation frames (with a
+100 ms task fallback for stalled headless tabs) and does not call \`gl.finish()\`.
+
 | Metric | Original median | Final median | Paired median ratio |
 |---|---:|---:|---:|
 | Host navigation → ready (ms) | ${format(baseline.hostReadyMs)} | ${format(candidate.hostReadyMs)} | ${format(result.ratios.hostReady, 4)} |
 | Browser navigation → ready (ms) | ${format(baseline.browserReadyMs)} | ${format(candidate.browserReadyMs)} | ${format(result.ratios.browserReady, 4)} |
+| Post-callback GPU drain (ms) | ${format(baseline.gpuDrainMs)} | ${format(candidate.gpuDrainMs)} | n/a |
+| GPU-drain polling yields | ${format(baseline.gpuDrainPollAttempts, 0)} | ${format(candidate.gpuDrainPollAttempts, 0)} | n/a |
+| GPU-drain animation-frame yields | ${format(baseline.gpuDrainRafYields, 0)} | ${format(candidate.gpuDrainRafYields, 0)} | n/a |
+| GPU-drain timeout fallbacks | ${format(baseline.gpuDrainTimeoutFallbacks, 0)} | ${format(candidate.gpuDrainTimeoutFallbacks, 0)} | n/a |
+| Initial GPU timer samples | ${format(baseline.gpuTimerSamples, 0)} | ${format(candidate.gpuTimerSamples, 0)} | n/a |
 | Chrome process startup (ms) | ${format(baseline.browserStartedMs)} | ${format(candidate.browserStartedMs)} | ${format(result.ratios.browserStarted, 4)} |
 | Programs created | ${format(baseline.createProgram, 0)} | ${format(candidate.createProgram, 0)} | ${format(result.ratios.createProgram, 4)} |
 | Textures created | ${format(baseline.createTexture, 0)} | ${format(candidate.createTexture, 0)} | ${format(result.ratios.createTexture, 4)} |

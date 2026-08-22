@@ -122,12 +122,14 @@ export function createDrawCommon({
     useTemporalBank = false,
   ) => {
     if (!exactGl) return;
-    const nextWaveTextures = useTemporalBank
-      ? resources.temporalWaveTextures
-      : resources.waveTextures;
-    const nextReflectionTextures = useTemporalBank
-      ? resources.temporalReflectionTextures
-      : resources.reflectionTextures;
+    const temporalTargets = useTemporalBank ? resources.temporalTargets : null;
+    if (useTemporalBank && !temporalTargets) {
+      throw new Error("Temporal path targets have not been allocated.");
+    }
+    const nextWaveTextures =
+      temporalTargets?.waveTextures ?? resources.waveTextures;
+    const nextReflectionTextures =
+      temporalTargets?.reflectionTextures ?? resources.reflectionTextures;
     exactGl.activeTexture(exactGl.TEXTURE0);
     exactGl.bindTexture(exactGl.TEXTURE_2D, resources.waveTextures[0]);
     exactGl.activeTexture(exactGl.TEXTURE1);

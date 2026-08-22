@@ -151,15 +151,29 @@ export const GLASS_COMPOSITE_UNIFORMS = [
   "uOffsetY",
 ] as const;
 
-export interface PathResources {
-  integralPrograms: [ProgramBundle, ProgramBundle, ProgramBundle];
-  sourceIntegralPrograms: [ProgramBundle, ProgramBundle, ProgramBundle];
-  compositeProgram: ProgramBundle;
-  baseCompositeProgram: ProgramBundle;
-  staticCompositeProgram: ProgramBundle;
-  staticBaseCompositeProgram: ProgramBundle;
-  idleDotsProgram: ProgramBundle;
-  pointerDotsProgram: ProgramBundle;
+export interface PathTargetBank {
+  framebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
+  waveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
+  reflectionTextures: [WebGLTexture, WebGLTexture];
+}
+
+export interface PathResources extends PathTargetBank {
+  integralPrograms: [
+    ProgramBundle | null,
+    ProgramBundle | null,
+    ProgramBundle | null,
+  ];
+  sourceIntegralPrograms: [
+    ProgramBundle | null,
+    ProgramBundle | null,
+    ProgramBundle | null,
+  ];
+  compositeProgram: ProgramBundle | null;
+  baseCompositeProgram: ProgramBundle | null;
+  staticCompositeProgram: ProgramBundle | null;
+  staticBaseCompositeProgram: ProgramBundle | null;
+  idleDotsProgram: ProgramBundle | null;
+  pointerDotsProgram: ProgramBundle | null;
   quadBuffer: WebGLBuffer;
   segmentBuffers: [WebGLBuffer, WebGLBuffer, WebGLBuffer];
   sourceIntegralVaos: [
@@ -168,18 +182,14 @@ export interface PathResources {
     WebGLVertexArrayObject | null,
   ];
   sourceIntegralVaoKeys: [number, number, number];
-  framebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
-  waveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
-  reflectionTextures: [WebGLTexture, WebGLTexture];
-  temporalFramebuffers: [WebGLFramebuffer, WebGLFramebuffer, WebGLFramebuffer];
-  temporalWaveTextures: [WebGLTexture, WebGLTexture, WebGLTexture];
-  temporalReflectionTextures: [WebGLTexture, WebGLTexture];
+  temporalTargets: PathTargetBank | null;
   k0Texture: WebGLTexture;
   passWidths: [number, number, number];
   passHeights: [number, number, number];
   stagingData: [Float32Array, Float32Array, Float32Array];
   uploadedSceneHashes: [number, number, number];
   temporalAnchorIndex: number;
+  temporalSecondBankReady: boolean;
   temporalSettingsReference: Settings | null;
   temporalSettingsKey: string;
   temporalPaletteTexture: WebGLTexture | null;

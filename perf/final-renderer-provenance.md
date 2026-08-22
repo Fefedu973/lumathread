@@ -8,6 +8,8 @@ The committed `src/` tree contains the directly selected renderer stack:
 - split idle dots with local exact pointer-warp fallback;
 - bounded glass effect and persistent framebuffer resources;
 - shared path segment upload, cached source-integral VAOs and static uniforms;
+- lazy, cached compilation of only the Path shader variants used by the scene;
+- a primary-only first render, with temporal targets allocated after presentation and one integral bank bootstrapped per frame;
 - Hero HDR temporal anchors at 15 Hz;
 - stable anchored CTA HDR temporal anchors at 10 Hz;
 - immediate frame-by-frame fallback while the pointer is active;

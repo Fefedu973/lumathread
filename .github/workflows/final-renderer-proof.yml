@@ -9,6 +9,7 @@ on:
       - perf/final-renderer-provenance.md
       - perf/harness/**
       - perf/scripts/add-final-cta-parity-snapshots.mjs
+      - perf/scripts/add-temporal-parity-snapshots.mjs
       - perf/scripts/benchmark-core.mjs
       - perf/scripts/benchmark-suite.mjs
       - perf/scripts/evaluate-final-renderer-benchmark.py
@@ -38,8 +39,11 @@ jobs:
         run: |
           grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
             src/runtime/path-renderer.ts
-          grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
+          grep -Fq 'const temporalActive = shouldUseTemporalPathCache(' \
             src/runtime/path-renderer.ts
+          grep -Fq 'ensureTemporalPathTargets(resources)' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'temporalSecondBankReady' src/runtime/path-renderer.ts
           grep -Fq 'PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER' \
             src/rendering/path-shaders.ts
           test -f perf/final-renderer-provenance.md

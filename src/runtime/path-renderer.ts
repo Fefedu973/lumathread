@@ -34,6 +34,32 @@ import type { DrawControllerOptions } from "./draw-types";
 import type { createDrawCommon } from "./draw-common";
 import type { createGlassTerrainRenderer } from "./glass-terrain-renderer";
 
+export function selectTemporalPathCacheAction(
+  cachedAnchorIndex: number,
+  nextAnchorIndex: number,
+  secondBankReady: boolean,
+  settingsChanged: boolean,
+) {
+  if (
+    settingsChanged ||
+    cachedAnchorIndex === Number.MIN_SAFE_INTEGER ||
+    Math.abs(nextAnchorIndex - cachedAnchorIndex) > 1
+  ) {
+    return "render-primary" as const;
+  }
+  if (!secondBankReady) {
+    return nextAnchorIndex === cachedAnchorIndex
+      ? ("render-secondary" as const)
+      : ("render-primary" as const);
+  }
+  if (nextAnchorIndex === cachedAnchorIndex + 1) {
+    return "swap-render-secondary" as const;
+  }
+  return nextAnchorIndex === cachedAnchorIndex
+    ? ("reuse" as const)
+    : ("render-primary" as const);
+}
+
 export function createPathRenderer(
   {
     gl,
@@ -47,6 +73,7 @@ export function createPathRenderer(
     followModifierScratch,
     musicModifierScratch,
     getClockTime,
+    isInitialFramePresented,
     activateProgram,
     getStyleTextures,
     updateBackgroundImage,
@@ -69,8 +96,17 @@ export function createPathRenderer(
     fillHueMatrix,
   } = common;
   const { applyDotInteractionUniforms } = glassTerrain;
-  const { bindSceneTarget, ensurePathResources, allocatePathTargets } =
-    resourceManager;
+  const {
+    bindSceneTarget,
+    ensurePathResources,
+    allocatePathTargets,
+    ensureTemporalPathTargets,
+    failPathResources,
+    reportPathResourcesReady,
+    ensurePathIntegralProgram,
+    ensurePathCompositeProgram,
+    ensurePathDotsProgram,
+  } = resourceManager;
   const { updateGeometryState } = geometryController;
   const { musicModifiers, combineRuntimeModifiers } = musicController;
   const { followModifiers } = followController;
@@ -445,6 +481,59 @@ export function createPathRenderer(
     settings.dotOpacity > 0.000001 &&
     settings.dotSpacing > 0.000001;
 
+  const flatDotPointerBounds = (settings: Settings) => {
+    if (!settings.dotInteraction.enabled || !pointerState.dotPointerActive) {
+      return null;
+    }
+    const radius = settings.dotInteraction.radius * resourceState.dpr;
+    const centerX = pointerState.dotPointerX * resourceState.canvasWidth;
+    const centerY = pointerState.dotPointerY * resourceState.canvasHeight;
+    const left = Math.max(0, Math.floor(centerX - radius));
+    const bottom = Math.max(0, Math.floor(centerY - radius));
+    const right = Math.min(
+      resourceState.canvasWidth,
+      Math.ceil(centerX + radius),
+    );
+    const top = Math.min(
+      resourceState.canvasHeight,
+      Math.ceil(centerY + radius),
+    );
+    return right > left && top > bottom ? { left, bottom, right, top } : null;
+  };
+
+  const preflightPathPrograms = (
+    resources: PathResources,
+    root: Settings,
+    scene: readonly PreparedFilamentFrame[],
+    temporalActive: boolean,
+  ) => {
+    for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+      let needsIntegral = false;
+      let needsSourceIntegral = false;
+      for (const entry of scene) {
+        if ((entry.geometry.segmentCounts[pass] ?? 0) <= 0) continue;
+        if (shouldUseSourceInstancedQuadrature(entry.settings)) {
+          needsSourceIntegral = true;
+        } else {
+          needsIntegral = true;
+        }
+      }
+      if (needsIntegral) {
+        ensurePathIntegralProgram(resources, pass, false);
+      }
+      if (needsSourceIntegral) {
+        ensurePathIntegralProgram(resources, pass, true);
+      }
+    }
+    const splitFlatDots = shouldSplitFlatDots(root);
+    ensurePathCompositeProgram(resources, temporalActive, splitFlatDots);
+    if (!splitFlatDots) return;
+    ensurePathDotsProgram(resources, false);
+    if (flatDotPointerBounds(root)) {
+      ensurePathDotsProgram(resources, true);
+    }
+  };
+
   const applyFlatDotUniforms = (bundle: ProgramBundle, settings: Settings) => {
     if (!exactGl) return;
     uniform2f(
@@ -496,8 +585,9 @@ export function createPathRenderer(
       );
     }
 
-    activateProgram(resources.idleDotsProgram.program);
-    applyFlatDotUniforms(resources.idleDotsProgram, settings);
+    const idleDotsProgram = ensurePathDotsProgram(resources, false);
+    activateProgram(idleDotsProgram.program);
+    applyFlatDotUniforms(idleDotsProgram, settings);
     exactGl.drawArraysInstanced(
       exactGl.TRIANGLES,
       0,
@@ -505,31 +595,21 @@ export function createPathRenderer(
       columns * rows,
     );
 
-    const pointerActive =
-      settings.dotInteraction.enabled && pointerState.dotPointerActive;
-    if (pointerActive) {
-      const radius = settings.dotInteraction.radius * resourceState.dpr;
-      const centerX = pointerState.dotPointerX * resourceState.canvasWidth;
-      const centerY = pointerState.dotPointerY * resourceState.canvasHeight;
-      const left = Math.max(0, Math.floor(centerX - radius));
-      const bottom = Math.max(0, Math.floor(centerY - radius));
-      const right = Math.min(
-        resourceState.canvasWidth,
-        Math.ceil(centerX + radius),
+    const pointerBounds = flatDotPointerBounds(settings);
+    if (pointerBounds) {
+      const pointerDotsProgram = ensurePathDotsProgram(resources, true);
+      activateProgram(pointerDotsProgram.program);
+      bindFullscreen(pointerDotsProgram);
+      applyFlatDotUniforms(pointerDotsProgram, settings);
+      exactGl.enable(exactGl.SCISSOR_TEST);
+      exactGl.scissor(
+        pointerBounds.left,
+        pointerBounds.bottom,
+        pointerBounds.right - pointerBounds.left,
+        pointerBounds.top - pointerBounds.bottom,
       );
-      const top = Math.min(
-        resourceState.canvasHeight,
-        Math.ceil(centerY + radius),
-      );
-      if (right > left && top > bottom) {
-        activateProgram(resources.pointerDotsProgram.program);
-        bindFullscreen(resources.pointerDotsProgram);
-        applyFlatDotUniforms(resources.pointerDotsProgram, settings);
-        exactGl.enable(exactGl.SCISSOR_TEST);
-        exactGl.scissor(left, bottom, right - left, top - bottom);
-        exactGl.drawArrays(exactGl.TRIANGLES, 0, 3);
-        exactGl.disable(exactGl.SCISSOR_TEST);
-      }
+      exactGl.drawArrays(exactGl.TRIANGLES, 0, 3);
+      exactGl.disable(exactGl.SCISSOR_TEST);
     }
     exactGl.disable(exactGl.BLEND);
   };
@@ -553,13 +633,11 @@ export function createPathRenderer(
     exactGl.disable(exactGl.BLEND);
     bindCompositeTextures(resources, temporalActive);
     const splitFlatDots = shouldSplitFlatDots(settings);
-    const compositeProgram = temporalActive
-      ? splitFlatDots
-        ? resources.baseCompositeProgram
-        : resources.compositeProgram
-      : splitFlatDots
-        ? resources.staticBaseCompositeProgram
-        : resources.staticCompositeProgram;
+    const compositeProgram = ensurePathCompositeProgram(
+      resources,
+      temporalActive,
+      splitFlatDots,
+    );
     activateProgram(compositeProgram.program);
     bindFullscreen(compositeProgram);
     uniform2f(
@@ -652,9 +730,11 @@ export function createPathRenderer(
         const sourceInstanced = shouldUseSourceInstancedQuadrature(
           entry.settings,
         );
-        const bundle = sourceInstanced
-          ? resources.sourceIntegralPrograms[pass]!
-          : resources.integralPrograms[pass]!;
+        const bundle = ensurePathIntegralProgram(
+          resources,
+          pass,
+          sourceInstanced,
+        );
         if (activeProgram !== bundle.program) {
           activateProgram(bundle.program);
           activeProgram = bundle.program;
@@ -712,6 +792,10 @@ export function createPathRenderer(
     root: Settings,
     scene: readonly PreparedFilamentFrame[],
   ) => {
+    if (!isInitialFramePresented()) {
+      temporalSceneStability.delete(resources);
+      return false;
+    }
     const common =
       scene.length === 1 &&
       root.pathMode === "custom" &&
@@ -739,16 +823,20 @@ export function createPathRenderer(
   };
 
   const swapTemporalPathBanks = (resources: PathResources) => {
-    [resources.framebuffers, resources.temporalFramebuffers] = [
-      resources.temporalFramebuffers,
+    const temporalTargets = resources.temporalTargets;
+    if (!temporalTargets) {
+      throw new Error("Temporal path targets have not been allocated.");
+    }
+    [resources.framebuffers, temporalTargets.framebuffers] = [
+      temporalTargets.framebuffers,
       resources.framebuffers,
     ];
-    [resources.waveTextures, resources.temporalWaveTextures] = [
-      resources.temporalWaveTextures,
+    [resources.waveTextures, temporalTargets.waveTextures] = [
+      temporalTargets.waveTextures,
       resources.waveTextures,
     ];
-    [resources.reflectionTextures, resources.temporalReflectionTextures] = [
-      resources.temporalReflectionTextures,
+    [resources.reflectionTextures, temporalTargets.reflectionTextures] = [
+      temporalTargets.reflectionTextures,
       resources.reflectionTextures,
     ];
   };
@@ -815,6 +903,10 @@ export function createPathRenderer(
     root: Settings,
     scene: readonly PreparedFilamentFrame[],
   ) => {
+    const temporalTargets = resources.temporalTargets;
+    if (!temporalTargets) {
+      throw new Error("Temporal path targets have not been allocated.");
+    }
     const currentTime = scene[0]?.visualTime ?? 0;
     const temporalAnchorRateHz = root.motionMode === "anchored" ? 10 : 15;
     const visualStep = Math.max(
@@ -829,57 +921,59 @@ export function createPathRenderer(
       resources.temporalPaletteTexture !== (entry?.style.palette ?? null) ||
       resources.temporalProfilesTexture !== (entry?.style.profiles ?? null) ||
       resources.temporalSizeRevision !== resourceState.sizeRevision;
-    if (
-      settingsChanged ||
-      resources.temporalAnchorIndex === Number.MIN_SAFE_INTEGER ||
-      Math.abs(anchorIndex - resources.temporalAnchorIndex) > 1
-    ) {
-      renderPreparedPathBank(
-        resources,
-        scene,
-        resources.framebuffers,
-        anchorIndex * visualStep,
-      );
-      renderPreparedPathBank(
-        resources,
-        scene,
-        resources.temporalFramebuffers,
-        (anchorIndex + 1) * visualStep,
-      );
+
+    const commitCacheIdentity = () => {
       resources.temporalAnchorIndex = anchorIndex;
       resources.temporalSettingsReference = root;
       resources.temporalSettingsKey = settingsKey;
       resources.temporalPaletteTexture = entry?.style.palette ?? null;
       resources.temporalProfilesTexture = entry?.style.profiles ?? null;
       resources.temporalSizeRevision = resourceState.sizeRevision;
-    } else if (anchorIndex === resources.temporalAnchorIndex + 1) {
-      swapTemporalPathBanks(resources);
-      resources.temporalAnchorIndex = anchorIndex;
-      renderPreparedPathBank(
-        resources,
-        scene,
-        resources.temporalFramebuffers,
-        (anchorIndex + 1) * visualStep,
-      );
-    } else if (anchorIndex !== resources.temporalAnchorIndex) {
+    };
+
+    const cacheAction = selectTemporalPathCacheAction(
+      resources.temporalAnchorIndex,
+      anchorIndex,
+      resources.temporalSecondBankReady,
+      settingsChanged,
+    );
+    if (cacheAction === "render-primary") {
       renderPreparedPathBank(
         resources,
         scene,
         resources.framebuffers,
         anchorIndex * visualStep,
       );
+      commitCacheIdentity();
+      resources.temporalSecondBankReady = false;
+      return { mix: 0, ready: false };
+    }
+
+    if (cacheAction === "render-secondary") {
       renderPreparedPathBank(
         resources,
         scene,
-        resources.temporalFramebuffers,
+        temporalTargets.framebuffers,
         (anchorIndex + 1) * visualStep,
       );
+      resources.temporalSecondBankReady = true;
+    } else if (cacheAction === "swap-render-secondary") {
+      swapTemporalPathBanks(resources);
       resources.temporalAnchorIndex = anchorIndex;
+      renderPreparedPathBank(
+        resources,
+        scene,
+        temporalTargets.framebuffers,
+        (anchorIndex + 1) * visualStep,
+      );
     }
-    return Math.max(
-      0,
-      Math.min(1, (currentTime - anchorIndex * visualStep) / visualStep),
-    );
+    return {
+      mix: Math.max(
+        0,
+        Math.min(1, (currentTime - anchorIndex * visualStep) / visualStep),
+      ),
+      ready: true,
+    };
   };
 
   const drawUnavailablePath = (settings: Settings) => {
@@ -901,7 +995,13 @@ export function createPathRenderer(
       drawUnavailablePath(root);
       return;
     }
-    allocatePathTargets(resources, root);
+    try {
+      allocatePathTargets(resources, root);
+    } catch (error) {
+      failPathResources(resources, error);
+      drawUnavailablePath(root);
+      return;
+    }
     preparedSceneFrames.length = scene.length;
     for (let index = 0; index < scene.length; index++) {
       const settings = scene[index]!;
@@ -945,16 +1045,36 @@ export function createPathRenderer(
       );
     }
     uploadSceneGeometry(resources, preparedSceneFrames);
-    if (shouldUseTemporalPathCache(resources, root, preparedSceneFrames)) {
-      const temporalMix = updateTemporalHeroCache(
+    const temporalActive = shouldUseTemporalPathCache(
+      resources,
+      root,
+      preparedSceneFrames,
+    );
+    try {
+      if (temporalActive) {
+        ensureTemporalPathTargets(resources);
+        preflightPathPrograms(resources, root, preparedSceneFrames, false);
+        preflightPathPrograms(resources, root, preparedSceneFrames, true);
+      } else {
+        preflightPathPrograms(resources, root, preparedSceneFrames, false);
+      }
+    } catch (error) {
+      failPathResources(resources, error);
+      drawUnavailablePath(root);
+      return;
+    }
+    reportPathResourcesReady(resources);
+    if (temporalActive) {
+      const temporalCache = updateTemporalHeroCache(
         resources,
         root,
         preparedSceneFrames,
       );
-      compositePath(resources, root, temporalMix, true);
+      compositePath(resources, root, temporalCache.mix, temporalCache.ready);
       return;
     }
     resources.temporalAnchorIndex = Number.MIN_SAFE_INTEGER;
+    resources.temporalSecondBankReady = false;
     resources.temporalSettingsReference = null;
     resources.temporalSettingsKey = "";
     resources.temporalPaletteTexture = null;

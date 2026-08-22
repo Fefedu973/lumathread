@@ -24,7 +24,13 @@ if (!suite.includes(steadyCaptureMarker)) {
   if (start < 0 || end < 0) {
     throw new Error("Unable to locate captureSnapshot implementation.");
   }
-  const replacement = `async function captureSnapshot(chrome, baseUrl, snapshot, destination) {
+  const replacement = `async function captureSnapshot(
+  chrome,
+  baseUrl,
+  snapshot,
+  destination,
+  validateTemporalReuse = false,
+) {
   const steadySteps = Array.isArray(snapshot.steps) ? snapshot.steps : null;
   const query = new URLSearchParams({
     scenario: snapshot.scenario,
@@ -43,10 +49,38 @@ if (!suite.includes(steadyCaptureMarker)) {
     await evaluate(page.client, \`document.fonts?.ready ?? Promise.resolve()\`);
     if (steadySteps) {
       await sleep(100);
+      for (let frame = 0; frame < 3; frame += 1) {
+        await stepFrame(page.client, 0);
+      }
       for (const seconds of steadySteps) await stepFrame(page.client, seconds);
       await sleep(50);
     } else {
+      // Snapshot pages are paused. Advance the fixed timestamp without changing
+      // it so both stages of the temporal cache are exercised before capture.
+      for (let frame = 0; frame < 3; frame += 1) {
+        await stepFrame(page.client, 0);
+      }
       await sleep(900);
+    }
+    if (validateTemporalReuse) {
+      await resetMeasurements(page);
+      await stepFrame(page.client, 0);
+      const counters = await evaluate(
+        page.client,
+        \`window.__LUMATHREAD_GL_STATS__?.counters ?? {}\`,
+      );
+      for (const name of [
+        "createTexture",
+        "createFramebuffer",
+        "createProgram",
+        "framebufferTexture2D",
+      ]) {
+        if (Number(counters?.[name] ?? 0) !== 0) {
+          throw new Error(
+            \`Temporal snapshot reuse failed: \${name}=\${counters?.[name]}.\`,
+          );
+        }
+      }
     }
     const result = await page.client.call("Page.captureScreenshot", {
       format: "png",

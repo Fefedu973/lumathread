@@ -45,6 +45,7 @@ import {
   GLASS_BLUR_UNIFORMS,
   GLASS_COMPOSITE_UNIFORMS,
   type PathResources,
+  type PathTargetBank,
   PATH_INTEGRAL_UNIFORMS,
   PATH_INTEGRAL_COMPOSITE_UNIFORMS,
   createProgramBundle,
@@ -450,6 +451,92 @@ export function createResourceManager({
     );
   };
 
+  const resetTemporalPathCache = (resources: PathResources) => {
+    resources.temporalAnchorIndex = Number.MIN_SAFE_INTEGER;
+    resources.temporalSecondBankReady = false;
+    resources.temporalSettingsReference = null;
+    resources.temporalSettingsKey = "";
+    resources.temporalPaletteTexture = null;
+    resources.temporalProfilesTexture = null;
+    resources.temporalSizeRevision = -1;
+  };
+
+  const allocateFloatPathTexture = (
+    texture: WebGLTexture,
+    width: number,
+    height: number,
+  ) => {
+    if (!exactGl) return;
+    exactGl.bindTexture(exactGl.TEXTURE_2D, texture);
+    exactGl.texImage2D(
+      exactGl.TEXTURE_2D,
+      0,
+      exactGl.RGBA16F,
+      width,
+      height,
+      0,
+      exactGl.RGBA,
+      exactGl.HALF_FLOAT,
+      null,
+    );
+  };
+
+  const allocatePathTargetBank = (
+    bank: PathTargetBank,
+    widths: PathResources["passWidths"],
+    heights: PathResources["passHeights"],
+  ) => {
+    for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+      allocateFloatPathTexture(
+        bank.waveTextures[pass]!,
+        widths[pass]!,
+        heights[pass]!,
+      );
+      if (pass < HERO_PATH_PASS_CORE) {
+        allocateFloatPathTexture(
+          bank.reflectionTextures[pass]!,
+          widths[pass]!,
+          heights[pass]!,
+        );
+      }
+    }
+  };
+
+  const attachPathTargetBank = (bank: PathTargetBank) => {
+    if (!exactGl) return;
+    for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+      exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, bank.framebuffers[pass]!);
+      exactGl.framebufferTexture2D(
+        exactGl.FRAMEBUFFER,
+        exactGl.COLOR_ATTACHMENT0,
+        exactGl.TEXTURE_2D,
+        bank.waveTextures[pass]!,
+        0,
+      );
+      if (pass < HERO_PATH_PASS_CORE) {
+        exactGl.framebufferTexture2D(
+          exactGl.FRAMEBUFFER,
+          exactGl.COLOR_ATTACHMENT1,
+          exactGl.TEXTURE_2D,
+          bank.reflectionTextures[pass]!,
+          0,
+        );
+        exactGl.drawBuffers([
+          exactGl.COLOR_ATTACHMENT0,
+          exactGl.COLOR_ATTACHMENT1,
+        ]);
+      } else {
+        exactGl.drawBuffers([exactGl.COLOR_ATTACHMENT0]);
+      }
+      const status = exactGl.checkFramebufferStatus(exactGl.FRAMEBUFFER);
+      if (status !== exactGl.FRAMEBUFFER_COMPLETE) {
+        throw new Error(
+          `Incomplete floating-point path framebuffer: ${status}`,
+        );
+      }
+    }
+  };
+
   const allocatePathTargets = (
     resources: PathResources,
     settings: Settings,
@@ -470,121 +557,94 @@ export function createResourceManager({
     resources.targetSettingsReference = settings;
     resources.targetSizeRevision = resourceState.sizeRevision;
     if (unchanged) return false;
-    const allocateFloatTexture = (
-      texture: WebGLTexture,
-      width: number,
-      height: number,
-    ) => {
-      exactGl.bindTexture(exactGl.TEXTURE_2D, texture);
-      exactGl.texImage2D(
-        exactGl.TEXTURE_2D,
-        0,
-        exactGl.RGBA16F,
-        width,
-        height,
-        0,
-        exactGl.RGBA,
-        exactGl.HALF_FLOAT,
-        null,
+    allocatePathTargetBank(resources, desired.widths, desired.heights);
+    if (resources.temporalTargets) {
+      allocatePathTargetBank(
+        resources.temporalTargets,
+        desired.widths,
+        desired.heights,
       );
-    };
-    for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
-      for (const waveTexture of [
-        resources.waveTextures[pass]!,
-        resources.temporalWaveTextures[pass]!,
-      ]) {
-        allocateFloatTexture(
-          waveTexture,
-          desired.widths[pass]!,
-          desired.heights[pass]!,
-        );
-      }
-      if (pass < HERO_PATH_PASS_CORE) {
-        for (const reflectionTexture of [
-          resources.reflectionTextures[pass]!,
-          resources.temporalReflectionTextures[pass]!,
-        ]) {
-          allocateFloatTexture(
-            reflectionTexture,
-            desired.widths[pass]!,
-            desired.heights[pass]!,
-          );
-        }
-      }
     }
     resources.passWidths = desired.widths;
     resources.passHeights = desired.heights;
-    const attachPathBank = (
-      framebuffers: PathResources["framebuffers"],
-      waveTextures: PathResources["waveTextures"],
-      reflectionTextures: PathResources["reflectionTextures"],
-    ) => {
-      for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
-        exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, framebuffers[pass]!);
-        exactGl.framebufferTexture2D(
-          exactGl.FRAMEBUFFER,
-          exactGl.COLOR_ATTACHMENT0,
-          exactGl.TEXTURE_2D,
-          waveTextures[pass]!,
-          0,
-        );
-        if (pass < HERO_PATH_PASS_CORE) {
-          exactGl.framebufferTexture2D(
-            exactGl.FRAMEBUFFER,
-            exactGl.COLOR_ATTACHMENT1,
-            exactGl.TEXTURE_2D,
-            reflectionTextures[pass]!,
-            0,
-          );
-          exactGl.drawBuffers([
-            exactGl.COLOR_ATTACHMENT0,
-            exactGl.COLOR_ATTACHMENT1,
-          ]);
-        } else {
-          exactGl.drawBuffers([exactGl.COLOR_ATTACHMENT0]);
-        }
-        const status = exactGl.checkFramebufferStatus(exactGl.FRAMEBUFFER);
-        if (status !== exactGl.FRAMEBUFFER_COMPLETE) {
-          throw new Error(
-            `Incomplete floating-point path framebuffer: ${status}`,
-          );
-        }
-      }
-    };
-    attachPathBank(
-      resources.framebuffers,
-      resources.waveTextures,
-      resources.reflectionTextures,
-    );
-    attachPathBank(
-      resources.temporalFramebuffers,
-      resources.temporalWaveTextures,
-      resources.temporalReflectionTextures,
-    );
-    resources.temporalAnchorIndex = Number.MIN_SAFE_INTEGER;
-    resources.temporalSettingsReference = null;
-    resources.temporalSettingsKey = "";
-    resources.temporalPaletteTexture = null;
-    resources.temporalProfilesTexture = null;
-    resources.temporalSizeRevision = -1;
+    attachPathTargetBank(resources);
+    if (resources.temporalTargets) {
+      attachPathTargetBank(resources.temporalTargets);
+    }
+    resetTemporalPathCache(resources);
     exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, null);
     return true;
   };
 
+  const ensureTemporalPathTargets = (resources: PathResources) => {
+    if (resources.temporalTargets) return resources.temporalTargets;
+    if (!exactGl) throw new Error("Exact paths require WebGL2.");
+    const framebuffers: WebGLFramebuffer[] = [];
+    const waveTextures: WebGLTexture[] = [];
+    const reflectionTextures: WebGLTexture[] = [];
+    try {
+      for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+        const framebuffer = exactGl.createFramebuffer();
+        if (!framebuffer) {
+          throw new Error("Unable to allocate a temporal path framebuffer.");
+        }
+        framebuffers.push(framebuffer);
+      }
+      const createFloatTarget = () =>
+        createTexture(exactGl, 0, exactGl.LINEAR, exactGl.LINEAR);
+      for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
+        waveTextures.push(createFloatTarget());
+      }
+      reflectionTextures.push(createFloatTarget());
+      reflectionTextures.push(createFloatTarget());
+      const targets: PathTargetBank = {
+        framebuffers: [framebuffers[0]!, framebuffers[1]!, framebuffers[2]!],
+        waveTextures: [waveTextures[0]!, waveTextures[1]!, waveTextures[2]!],
+        reflectionTextures: [reflectionTextures[0]!, reflectionTextures[1]!],
+      };
+      allocatePathTargetBank(
+        targets,
+        resources.passWidths,
+        resources.passHeights,
+      );
+      attachPathTargetBank(targets);
+      resources.temporalTargets = targets;
+      resetTemporalPathCache(resources);
+      exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, null);
+      return targets;
+    } catch (error) {
+      for (const framebuffer of framebuffers) {
+        exactGl.deleteFramebuffer(framebuffer);
+      }
+      for (const texture of waveTextures) exactGl.deleteTexture(texture);
+      for (const texture of reflectionTextures) exactGl.deleteTexture(texture);
+      exactGl.bindFramebuffer(exactGl.FRAMEBUFFER, null);
+      throw error;
+    }
+  };
+
+  const readyPathResources = new WeakSet<PathResources>();
+
   const destroyPathResources = (resources: PathResources | null) => {
     if (!resources || !exactGl) return;
     for (const program of resources.integralPrograms) {
-      exactGl.deleteProgram(program.program);
+      if (program) exactGl.deleteProgram(program.program);
     }
     for (const program of resources.sourceIntegralPrograms) {
-      exactGl.deleteProgram(program.program);
+      if (program) exactGl.deleteProgram(program.program);
     }
-    exactGl.deleteProgram(resources.compositeProgram.program);
-    exactGl.deleteProgram(resources.baseCompositeProgram.program);
-    exactGl.deleteProgram(resources.staticCompositeProgram.program);
-    exactGl.deleteProgram(resources.staticBaseCompositeProgram.program);
-    exactGl.deleteProgram(resources.idleDotsProgram.program);
-    exactGl.deleteProgram(resources.pointerDotsProgram.program);
+    if (resources.compositeProgram)
+      exactGl.deleteProgram(resources.compositeProgram.program);
+    if (resources.baseCompositeProgram)
+      exactGl.deleteProgram(resources.baseCompositeProgram.program);
+    if (resources.staticCompositeProgram)
+      exactGl.deleteProgram(resources.staticCompositeProgram.program);
+    if (resources.staticBaseCompositeProgram)
+      exactGl.deleteProgram(resources.staticBaseCompositeProgram.program);
+    if (resources.idleDotsProgram)
+      exactGl.deleteProgram(resources.idleDotsProgram.program);
+    if (resources.pointerDotsProgram)
+      exactGl.deleteProgram(resources.pointerDotsProgram.program);
     exactGl.deleteBuffer(resources.quadBuffer);
     for (const vao of resources.sourceIntegralVaos) {
       if (vao) exactGl.deleteVertexArray(vao);
@@ -595,18 +655,148 @@ export function createResourceManager({
     for (const framebuffer of resources.framebuffers) {
       exactGl.deleteFramebuffer(framebuffer);
     }
-    for (const framebuffer of resources.temporalFramebuffers) {
-      exactGl.deleteFramebuffer(framebuffer);
-    }
     for (const texture of resources.waveTextures)
       exactGl.deleteTexture(texture);
     for (const texture of resources.reflectionTextures)
       exactGl.deleteTexture(texture);
-    for (const texture of resources.temporalWaveTextures)
-      exactGl.deleteTexture(texture);
-    for (const texture of resources.temporalReflectionTextures)
-      exactGl.deleteTexture(texture);
+    if (resources.temporalTargets) {
+      for (const framebuffer of resources.temporalTargets.framebuffers) {
+        exactGl.deleteFramebuffer(framebuffer);
+      }
+      for (const texture of resources.temporalTargets.waveTextures) {
+        exactGl.deleteTexture(texture);
+      }
+      for (const texture of resources.temporalTargets.reflectionTextures) {
+        exactGl.deleteTexture(texture);
+      }
+      resources.temporalTargets = null;
+    }
     exactGl.deleteTexture(resources.k0Texture);
+    readyPathResources.delete(resources);
+  };
+
+  const failPathResources = (resources: PathResources, error: unknown) => {
+    reportError(error, "HeroWaveBackground exact multi-contribution renderer");
+    const reason = error instanceof Error ? error.message : String(error);
+    exactGl?.useProgram(null);
+    destroyPathResources(resources);
+    if (resourceState.pathResources === resources) {
+      resourceState.pathResources = null;
+    }
+    resourceState.pathRendererErrorLogged = true;
+    reportStatus({
+      renderer: "unavailable",
+      supported: false,
+      reason,
+      webglVersion: 2,
+    });
+  };
+
+  const reportPathResourcesReady = (resources: PathResources) => {
+    if (
+      resourceState.pathResources !== resources ||
+      readyPathResources.has(resources)
+    ) {
+      return;
+    }
+    readyPathResources.add(resources);
+    reportStatus({
+      renderer: "hdr",
+      supported: true,
+      webglVersion: 2,
+    });
+  };
+
+  const integralAttributeNames = [
+    "aCorner",
+    "aSegmentStart",
+    "aSegmentEnd",
+    "aProgressRange",
+    "aEndpointWeights",
+  ] as const;
+
+  const ensurePathIntegralProgram = (
+    resources: PathResources,
+    pass: number,
+    sourceInstanced: boolean,
+  ) => {
+    if (!exactGl) throw new Error("Exact paths require WebGL2.");
+    const programs = sourceInstanced
+      ? resources.sourceIntegralPrograms
+      : resources.integralPrograms;
+    const cached = programs[pass];
+    if (cached) return cached;
+    const fragmentShader = sourceInstanced
+      ? PATH_SOURCE_INTEGRAL_FRAGMENT_SHADERS[pass]
+      : PATH_INTEGRAL_FRAGMENT_SHADERS[pass];
+    if (!fragmentShader) {
+      throw new Error(`Invalid exact path render pass: ${pass}.`);
+    }
+    const program = createProgramBundle(
+      exactGl,
+      sourceInstanced
+        ? PATH_SOURCE_INTEGRAL_VERTEX_SHADER
+        : PATH_INTEGRAL_VERTEX_SHADER,
+      fragmentShader,
+      integralAttributeNames,
+      PATH_INTEGRAL_UNIFORMS,
+    );
+    programs[pass] = program;
+    return program;
+  };
+
+  const ensurePathCompositeProgram = (
+    resources: PathResources,
+    temporalActive: boolean,
+    baseOnly: boolean,
+  ) => {
+    if (!exactGl) throw new Error("Exact paths require WebGL2.");
+    const key = temporalActive
+      ? baseOnly
+        ? "baseCompositeProgram"
+        : "compositeProgram"
+      : baseOnly
+        ? "staticBaseCompositeProgram"
+        : "staticCompositeProgram";
+    const cached = resources[key];
+    if (cached) return cached;
+    const fragmentShader = temporalActive
+      ? baseOnly
+        ? PATH_INTEGRAL_BASE_COMPOSITE_FRAGMENT_SHADER
+        : PATH_INTEGRAL_COMPOSITE_FRAGMENT_SHADER
+      : baseOnly
+        ? PATH_INTEGRAL_STATIC_BASE_COMPOSITE_FRAGMENT_SHADER
+        : PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER;
+    const program = createProgramBundle(
+      exactGl,
+      FULLSCREEN_VERTEX_SHADER_300,
+      fragmentShader,
+      ["aPos"],
+      PATH_INTEGRAL_COMPOSITE_UNIFORMS,
+    );
+    resources[key] = program;
+    return program;
+  };
+
+  const ensurePathDotsProgram = (
+    resources: PathResources,
+    pointer: boolean,
+  ) => {
+    if (!exactGl) throw new Error("Exact paths require WebGL2.");
+    const key = pointer ? "pointerDotsProgram" : "idleDotsProgram";
+    const cached = resources[key];
+    if (cached) return cached;
+    const program = createProgramBundle(
+      exactGl,
+      pointer ? FULLSCREEN_VERTEX_SHADER_300 : PATH_DOTS_IDLE_VERTEX_SHADER,
+      pointer
+        ? PATH_DOTS_POINTER_STATIC_FRAGMENT_SHADER
+        : PATH_DOTS_IDLE_STATIC_FRAGMENT_SHADER,
+      pointer ? ["aPos"] : [],
+      PATH_INTEGRAL_COMPOSITE_UNIFORMS,
+    );
+    resources[key] = program;
+    return program;
   };
 
   const ensurePathResources = (settings: Settings) => {
@@ -627,22 +817,11 @@ export function createResourceManager({
       resourceState.pathResources = null;
       return resourceState.pathResources;
     }
-    const integralPrograms: ProgramBundle[] = [];
-    const sourceIntegralPrograms: ProgramBundle[] = [];
-    let compositeProgram: ProgramBundle | null = null;
-    let baseCompositeProgram: ProgramBundle | null = null;
-    let staticCompositeProgram: ProgramBundle | null = null;
-    let staticBaseCompositeProgram: ProgramBundle | null = null;
-    let idleDotsProgram: ProgramBundle | null = null;
-    let pointerDotsProgram: ProgramBundle | null = null;
     let quadBuffer: WebGLBuffer | null = null;
     const segmentBuffers: WebGLBuffer[] = [];
     const framebuffers: WebGLFramebuffer[] = [];
     const waveTextures: WebGLTexture[] = [];
     const reflectionTextures: WebGLTexture[] = [];
-    const temporalFramebuffers: WebGLFramebuffer[] = [];
-    const temporalWaveTextures: WebGLTexture[] = [];
-    const temporalReflectionTextures: WebGLTexture[] = [];
     let k0Texture: WebGLTexture | null = null;
     try {
       const colorBufferFloat = exactGl.getExtension("EXT_color_buffer_float");
@@ -660,91 +839,13 @@ export function createResourceManager({
           "The exact renderer requires two floating-point draw buffers.",
         );
       }
-      for (const fragmentShader of PATH_INTEGRAL_FRAGMENT_SHADERS) {
-        integralPrograms.push(
-          createProgramBundle(
-            exactGl,
-            PATH_INTEGRAL_VERTEX_SHADER,
-            fragmentShader,
-            [
-              "aCorner",
-              "aSegmentStart",
-              "aSegmentEnd",
-              "aProgressRange",
-              "aEndpointWeights",
-            ],
-            PATH_INTEGRAL_UNIFORMS,
-          ),
-        );
-      }
-      for (const fragmentShader of PATH_SOURCE_INTEGRAL_FRAGMENT_SHADERS) {
-        sourceIntegralPrograms.push(
-          createProgramBundle(
-            exactGl,
-            PATH_SOURCE_INTEGRAL_VERTEX_SHADER,
-            fragmentShader,
-            [
-              "aCorner",
-              "aSegmentStart",
-              "aSegmentEnd",
-              "aProgressRange",
-              "aEndpointWeights",
-            ],
-            PATH_INTEGRAL_UNIFORMS,
-          ),
-        );
-      }
-      compositeProgram = createProgramBundle(
-        exactGl,
-        FULLSCREEN_VERTEX_SHADER_300,
-        PATH_INTEGRAL_COMPOSITE_FRAGMENT_SHADER,
-        ["aPos"],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
-      baseCompositeProgram = createProgramBundle(
-        exactGl,
-        FULLSCREEN_VERTEX_SHADER_300,
-        PATH_INTEGRAL_BASE_COMPOSITE_FRAGMENT_SHADER,
-        ["aPos"],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
-      staticCompositeProgram = createProgramBundle(
-        exactGl,
-        FULLSCREEN_VERTEX_SHADER_300,
-        PATH_INTEGRAL_STATIC_COMPOSITE_FRAGMENT_SHADER,
-        ["aPos"],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
-      staticBaseCompositeProgram = createProgramBundle(
-        exactGl,
-        FULLSCREEN_VERTEX_SHADER_300,
-        PATH_INTEGRAL_STATIC_BASE_COMPOSITE_FRAGMENT_SHADER,
-        ["aPos"],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
-      idleDotsProgram = createProgramBundle(
-        exactGl,
-        PATH_DOTS_IDLE_VERTEX_SHADER,
-        PATH_DOTS_IDLE_STATIC_FRAGMENT_SHADER,
-        [],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
-      pointerDotsProgram = createProgramBundle(
-        exactGl,
-        FULLSCREEN_VERTEX_SHADER_300,
-        PATH_DOTS_POINTER_STATIC_FRAGMENT_SHADER,
-        ["aPos"],
-        PATH_INTEGRAL_COMPOSITE_UNIFORMS,
-      );
       quadBuffer = exactGl.createBuffer();
       for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
         const framebuffer = exactGl.createFramebuffer();
-        const temporalFramebuffer = exactGl.createFramebuffer();
-        if (!framebuffer || !temporalFramebuffer) {
+        if (!framebuffer) {
           throw new Error("Unable to allocate an exact path framebuffer.");
         }
         framebuffers.push(framebuffer);
-        temporalFramebuffers.push(temporalFramebuffer);
       }
       if (!quadBuffer) {
         throw new Error("Unable to allocate exact path resources.");
@@ -770,10 +871,9 @@ export function createResourceManager({
         createTexture(exactGl, 0, exactGl.LINEAR, exactGl.LINEAR);
       for (let pass = 0; pass < HERO_PATH_PASS_COUNT; pass++) {
         waveTextures.push(createFloatTarget());
-        temporalWaveTextures.push(createFloatTarget());
       }
-      reflectionTextures.push(createFloatTarget(), createFloatTarget());
-      temporalReflectionTextures.push(createFloatTarget(), createFloatTarget());
+      reflectionTextures.push(createFloatTarget());
+      reflectionTextures.push(createFloatTarget());
       k0Texture = createTexture(exactGl, 1, exactGl.NEAREST, exactGl.NEAREST);
       exactGl.bindTexture(exactGl.TEXTURE_2D, k0Texture);
       exactGl.texImage2D(
@@ -788,22 +888,14 @@ export function createResourceManager({
         getPathK0TextureData(),
       );
       const resources: PathResources = {
-        integralPrograms: [
-          integralPrograms[0]!,
-          integralPrograms[1]!,
-          integralPrograms[2]!,
-        ],
-        sourceIntegralPrograms: [
-          sourceIntegralPrograms[0]!,
-          sourceIntegralPrograms[1]!,
-          sourceIntegralPrograms[2]!,
-        ],
-        compositeProgram,
-        baseCompositeProgram,
-        staticCompositeProgram,
-        staticBaseCompositeProgram,
-        idleDotsProgram,
-        pointerDotsProgram,
+        integralPrograms: [null, null, null],
+        sourceIntegralPrograms: [null, null, null],
+        compositeProgram: null,
+        baseCompositeProgram: null,
+        staticCompositeProgram: null,
+        staticBaseCompositeProgram: null,
+        idleDotsProgram: null,
+        pointerDotsProgram: null,
         quadBuffer,
         segmentBuffers: [
           segmentBuffers[0]!,
@@ -815,20 +907,7 @@ export function createResourceManager({
         framebuffers: [framebuffers[0]!, framebuffers[1]!, framebuffers[2]!],
         waveTextures: [waveTextures[0]!, waveTextures[1]!, waveTextures[2]!],
         reflectionTextures: [reflectionTextures[0]!, reflectionTextures[1]!],
-        temporalFramebuffers: [
-          temporalFramebuffers[0]!,
-          temporalFramebuffers[1]!,
-          temporalFramebuffers[2]!,
-        ],
-        temporalWaveTextures: [
-          temporalWaveTextures[0]!,
-          temporalWaveTextures[1]!,
-          temporalWaveTextures[2]!,
-        ],
-        temporalReflectionTextures: [
-          temporalReflectionTextures[0]!,
-          temporalReflectionTextures[1]!,
-        ],
+        temporalTargets: null,
         k0Texture,
         passWidths: [0, 0, 0],
         passHeights: [0, 0, 0],
@@ -839,6 +918,7 @@ export function createResourceManager({
         ],
         uploadedSceneHashes: [-1, -1, -1],
         temporalAnchorIndex: Number.MIN_SAFE_INTEGER,
+        temporalSecondBankReady: false,
         temporalSettingsReference: null,
         temporalSettingsKey: "",
         temporalPaletteTexture: null,
@@ -849,11 +929,6 @@ export function createResourceManager({
       };
       allocatePathTargets(resources, settings);
       resourceState.pathResources = resources;
-      reportStatus({
-        renderer: "hdr",
-        supported: true,
-        webglVersion: 2,
-      });
     } catch (error) {
       reportError(
         error,
@@ -866,21 +941,6 @@ export function createResourceManager({
         reason,
         webglVersion: 2,
       });
-      for (const program of integralPrograms) {
-        exactGl.deleteProgram(program.program);
-      }
-      for (const program of sourceIntegralPrograms) {
-        exactGl.deleteProgram(program.program);
-      }
-      if (compositeProgram) exactGl.deleteProgram(compositeProgram.program);
-      if (baseCompositeProgram)
-        exactGl.deleteProgram(baseCompositeProgram.program);
-      if (staticCompositeProgram)
-        exactGl.deleteProgram(staticCompositeProgram.program);
-      if (staticBaseCompositeProgram)
-        exactGl.deleteProgram(staticBaseCompositeProgram.program);
-      if (idleDotsProgram) exactGl.deleteProgram(idleDotsProgram.program);
-      if (pointerDotsProgram) exactGl.deleteProgram(pointerDotsProgram.program);
       if (quadBuffer) exactGl.deleteBuffer(quadBuffer);
       for (const buffer of new Set(segmentBuffers)) {
         exactGl.deleteBuffer(buffer);
@@ -888,15 +948,8 @@ export function createResourceManager({
       for (const framebuffer of framebuffers) {
         exactGl.deleteFramebuffer(framebuffer);
       }
-      for (const framebuffer of temporalFramebuffers) {
-        exactGl.deleteFramebuffer(framebuffer);
-      }
       for (const texture of waveTextures) exactGl.deleteTexture(texture);
       for (const texture of reflectionTextures) exactGl.deleteTexture(texture);
-      for (const texture of temporalWaveTextures)
-        exactGl.deleteTexture(texture);
-      for (const texture of temporalReflectionTextures)
-        exactGl.deleteTexture(texture);
       if (k0Texture) exactGl.deleteTexture(k0Texture);
       resourceState.pathResources = null;
     }
@@ -915,7 +968,13 @@ export function createResourceManager({
     desiredIntegralPassSizes,
     attachIntegralPass,
     allocatePathTargets,
+    ensureTemporalPathTargets,
     destroyPathResources,
+    failPathResources,
+    reportPathResourcesReady,
+    ensurePathIntegralProgram,
+    ensurePathCompositeProgram,
+    ensurePathDotsProgram,
     ensurePathResources,
   };
 }

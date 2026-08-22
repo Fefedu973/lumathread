@@ -47,8 +47,11 @@ jobs:
         run: |
           grep -Fq 'root.motionMode === "anchored" ? 10 : 15' \
             src/runtime/path-renderer.ts
-          grep -Fq 'shouldUseTemporalPathCache(resources, root, preparedSceneFrames)' \
+          grep -Fq 'const temporalActive = shouldUseTemporalPathCache(' \
             src/runtime/path-renderer.ts
+          grep -Fq 'ensureTemporalPathTargets(resources)' \
+            src/runtime/path-renderer.ts
+          grep -Fq 'temporalSecondBankReady' src/runtime/path-renderer.ts
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2

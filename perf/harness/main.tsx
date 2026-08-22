@@ -408,6 +408,7 @@ function HeroScenario() {
       quality="auto"
       fadeInDuration={mode === "snapshot" || mode === "benchmark" ? 0 : 1200}
       paused={mode === "snapshot" || mode === "benchmark"}
+      initialTime={mode === "snapshot" ? snapshotTime : undefined}
       time={mode === "snapshot" ? snapshotTime : undefined}
       respectReducedMotion={false}
       pauseWhenOffscreen={false}
@@ -517,6 +518,7 @@ function CtaScenario() {
       quality="high"
       fadeInDuration={mode === "snapshot" || mode === "benchmark" ? 0 : 900}
       paused={mode === "snapshot" || mode === "benchmark"}
+      initialTime={mode === "snapshot" ? snapshotTime : undefined}
       time={mode === "snapshot" ? snapshotTime : undefined}
       respectReducedMotion={false}
       pauseWhenOffscreen={false}

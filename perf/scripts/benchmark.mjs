@@ -240,6 +240,7 @@ async function main() {
         options.candidate,
         snapshot,
         candidatePath,
+        true,
       );
       result.snapshots.push({
         ...snapshot,
